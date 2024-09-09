@@ -18,9 +18,9 @@ def main(src: str, dst: str, revision: str = 'v2'):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('DPRT data preprocessing')
     parser.add_argument('--src', type=str, default='/data/kradar/KRadar_refined_label_by_UWIPL',
-                        help="Path to the raw dataset folder.")
+                        help="Path to the refined labels.")
     parser.add_argument('--dst', type=str, default='/data/kradar/raw',
-                        help="Path to save the processed dataset.")
+                        help="Path to the dataset")
     args = parser.parse_args()
 
     main(src=args.src, dst=args.dst)

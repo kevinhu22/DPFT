@@ -669,7 +669,7 @@ class KRadarProcessor():
 
         # Load calibration data
         ra_to_lidar, ea_to_lidar = self.get_radar_calibration(sample['calib_radar_lidar'])
-        mono_to_lidar, stereo_to_lidar = self.get_camera_calibration(sample['calib_camera_lidar'])
+        # mono_to_lidar, stereo_to_lidar = self.get_camera_calibration(sample['calib_camera_lidar'])
 
         # Transform bounding boxes to lidar frame
         radar_to_lidar = self.get_translation(sample['calib_radar_lidar'])

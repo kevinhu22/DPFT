@@ -306,11 +306,11 @@ def main(src: str, cfg: str, dst: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DPRT data preprocessing')
-    parser.add_argument('--src', type=str, default='/data/kradar/KRadar_refined_label_by_UWIPL',
+    parser.add_argument('--src', type=str, default='/data/kradar/raw',
                         help="Path to the raw dataset folder.")
     parser.add_argument('--cfg', type=str, default='/app/config/kradar.json',
                         help="Path to the configuration file.")
-    parser.add_argument('--dst', type=str, default='/data/kradar/processed',
+    parser.add_argument('--dst', type=str, default='/data/kradar',
                         help="Path to save the processed dataset.")
     args = parser.parse_args()
 
