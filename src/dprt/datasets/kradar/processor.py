@@ -332,7 +332,7 @@ class KRadarProcessor():
             sequence_paths[sample_id]['camera_front'] = \
                 osp.join(base_path, 'cam-front', 'cam-front_' + camf_idx + '.png')
             sequence_paths[sample_id]['radar_tesseract'] = \
-                osp.join(base_path, 'radar_tesseract', 'tesseract_' + radar_idx + '.mat')
+                osp.join(base_path, 'radar_zyx_cube', 'cube_' + radar_idx + '.mat')
             sequence_paths[sample_id]['os1'] = \
                 osp.join(base_path, 'os1-128', 'os1-128_' + os1_idx + '.pcd')
             sequence_paths[sample_id]['os2'] = \
