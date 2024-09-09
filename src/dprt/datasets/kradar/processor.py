@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
+import cupy as cp
 from tqdm import tqdm
 from scipy.io import loadmat
 from pypcd import pypcd
@@ -332,7 +333,7 @@ class KRadarProcessor():
             sequence_paths[sample_id]['camera_front'] = \
                 osp.join(base_path, 'cam-front', 'cam-front_' + camf_idx + '.png')
             sequence_paths[sample_id]['radar_tesseract'] = \
-                osp.join(base_path, 'radar_zyx_cube', 'cube_' + radar_idx + '.mat')
+                osp.join(base_path, 'radar_tesseract', 'tesseract_' + radar_idx + '.mat')
             sequence_paths[sample_id]['os1'] = \
                 osp.join(base_path, 'os1-128', 'os1-128_' + os1_idx + '.pcd')
             sequence_paths[sample_id]['os2'] = \
@@ -581,7 +582,7 @@ class KRadarProcessor():
                 (doppler, range, elevation, azimuth)
         """
         # Load radar tesseract
-        tesseract: np.ndarray = loadmat(filename)['arrDREA']
+        tesseract: np.ndarray = loadmat(filename)['arr_zyx']
 
         return tesseract.astype(self._dtype)
 
@@ -595,43 +596,46 @@ class KRadarProcessor():
             ra: Range-Azimuth projection of the 4D radar tesseract.
             ea: Elevation-Azimuth projection of the 4D radar tesseract.
         """
-        # Load radar tesseract with shape (doppler, range, elevation, azimuth)
-        tesseract = self.get_radar_tesseract(filename)
+        try:
+            # Load radar tesseract with shape (doppler, range, elevation, azimuth)
+            tesseract = self.get_radar_tesseract(filename)
 
-        # Convert radar responce to dB
-        tesseract = 10 * np.log10(tesseract)
+            tesseract = cp.array(tesseract)
+            # Convert radar responce to dB
+            tesseract = 10 * cp.log10(tesseract)
 
-        # Reduce to range-azimuth plane
-        ra_rcs_max = np.max(np.max(tesseract, axis=2), axis=0)
-        ra_rcs_median = np.median(np.median(tesseract, axis=2), axis=0)
-        ra_rcs_var = np.var(np.var(tesseract, axis=2), axis=0)
+            # Reduce to range-azimuth plane
+            ra_rcs_max = cp.max(cp.max(tesseract, axis=2), axis=0)
+            ra_rcs_median = cp.median(cp.median(tesseract, axis=2), axis=0)
+            ra_rcs_var = cp.var(cp.var(tesseract, axis=2), axis=0)
 
-        ra_doppler_max_idx = np.argmax(np.max(tesseract, axis=2), axis=0)
-        ra_doppler_max = np.asarray(radar_info.doppler_raster)[ra_doppler_max_idx]
-        ra_doppler_median = np.median(np.max(tesseract, axis=2), axis=0)
-        ra_doppler_var = np.var(np.max(tesseract, axis=2), axis=0)
+            ra_doppler_max_idx = cp.argmax(cp.max(tesseract, axis=2), axis=0)
+            ra_doppler_max = cp.asarray(radar_info.doppler_raster)[ra_doppler_max_idx]
+            ra_doppler_median = cp.median(cp.max(tesseract, axis=2), axis=0)
+            ra_doppler_var = cp.var(cp.max(tesseract, axis=2), axis=0)
 
-        # Crop radar tesseract (to 4:252) in the range dimension due to fft artifacts
-        tesseract = tesseract[:, 4:252, :, :]
+            # Crop radar tesseract (to 4:252) in the range dimension due to fft artifacts
+            tesseract = tesseract[:, 4:252, :, :]
 
-        # Reduce to elevation-azimuth plane
-        ea_rcs_max = np.max(np.max(tesseract, axis=1), axis=0)
-        ea_rcs_median = np.median(np.median(tesseract, axis=1), axis=0)
-        ea_rcs_var = np.var(np.var(tesseract, axis=1), axis=0)
+            # Reduce to elevation-azimuth plane
+            ea_rcs_max = cp.max(cp.max(tesseract, axis=1), axis=0)
+            ea_rcs_median = cp.median(cp.median(tesseract, axis=1), axis=0)
+            ea_rcs_var = cp.var(cp.var(tesseract, axis=1), axis=0)
 
-        ea_doppler_max_idx = np.argmax(np.max(tesseract, axis=1), axis=0)
-        ea_doppler_max = np.asarray(radar_info.doppler_raster)[ea_doppler_max_idx]
-        ea_doppler_median = np.mean(np.max(tesseract, axis=1), axis=0)
-        ea_doppler_var = np.var(np.max(tesseract, axis=1), axis=0)
+            ea_doppler_max_idx = cp.argmax(cp.max(tesseract, axis=1), axis=0)
+            ea_doppler_max = cp.asarray(radar_info.doppler_raster)[ea_doppler_max_idx]
+            ea_doppler_median = cp.mean(cp.max(tesseract, axis=1), axis=0)
+            ea_doppler_var = cp.var(cp.max(tesseract, axis=1), axis=0)
 
-        # Stack radar features
-        ra = np.dstack((ra_rcs_max, ra_rcs_median, ra_rcs_var,
-                        ra_doppler_max, ra_doppler_median, ra_doppler_var))
-        ea = np.dstack((ea_rcs_max, ea_rcs_median, ea_rcs_var,
-                        ea_doppler_max, ea_doppler_median, ea_doppler_var))
+            # Stack radar features
+            ra = cp.dstack((ra_rcs_max, ra_rcs_median, ra_rcs_var,
+                            ra_doppler_max, ra_doppler_median, ra_doppler_var))
+            ea = cp.dstack((ea_rcs_max, ea_rcs_median, ea_rcs_var,
+                            ea_doppler_max, ea_doppler_median, ea_doppler_var))
 
-        return ra, ea
-
+            return cp.asnumpy(ra), cp.asnumpy(ea)
+        except Exception as error:
+            print('Caught this error: ' + repr(error))
     def map_description(self, description: List[str]) -> np.ndarray:
         """Returns an encoded scene description.
 
@@ -690,9 +694,9 @@ class KRadarProcessor():
         np.save(osp.join(dst, 'labels.npy'), boxes, allow_pickle=False)
         np.save(osp.join(dst, 'description.npy'), description, allow_pickle=False)
         cv2.imwrite(osp.join(dst, 'mono.jpg'), camera_front_left, self.jpg_quality)
-        np.save(osp.join(dst, 'mono_info.npy'), mono_to_lidar, allow_pickle=False)
+        # np.save(osp.join(dst, 'mono_info.npy'), mono_to_lidar, allow_pickle=False)
         cv2.imwrite(osp.join(dst, 'stereo.jpg'), camera_front_right, self.jpg_quality)
-        np.save(osp.join(dst, 'stereo_info.npy'), stereo_to_lidar, allow_pickle=False)
+        # np.save(osp.join(dst, 'stereo_info.npy'), stereo_to_lidar, allow_pickle=False)
         np.save(osp.join(dst, 'ra.npy'), ra, allow_pickle=False)
         np.save(osp.join(dst, 'ra_info.npy'), ra_to_lidar, allow_pickle=False)
         np.save(osp.join(dst, 'ea.npy'), ea, allow_pickle=False)
