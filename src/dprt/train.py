@@ -58,7 +58,7 @@ def main(src: str, cfg: str, dst: str, checkpoint: str = None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DPRT data preprocessing')
-    parser.add_argument('--src', type=str, default='/data/kradar/processed',
+    parser.add_argument('--src', type=str, default='/data/Samsung 8TB 2/kradar/processed',
                         help="Path to the raw dataset folder.")
     parser.add_argument('--cfg', type=str, default='/app/config/kradar.json',
                         help="Path to the configuration file.")

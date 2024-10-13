@@ -3,14 +3,13 @@ from __future__ import annotations  # noqa: F407
 import os
 import os.path as osp
 from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import cache
 from glob import glob
 from typing import Any, Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
-import cupy as cp
 from tqdm import tqdm
 from scipy.io import loadmat
 from pypcd import pypcd
@@ -19,7 +18,7 @@ from dprt.datasets.kradar.utils import radar_info
 from dprt.datasets.kradar.utils import split
 
 
-class KRadarProcessor():
+class KRadarProcessor:
     """K-Radar dataset preprocessor.
 
     Arguments:
@@ -31,16 +30,19 @@ class KRadarProcessor():
         dtype: Global data type used for the preprocessing
             (must be numpy compatible).
     """
-    def __init__(self,
-                 version: str = '',
-                 revision: str = '',
-                 categories: Dict[str, int] = None,
-                 road_structures: Dict[str, int] = None,
-                 weather_conditions: Dict[str, int] = None,
-                 time_zone: Dict[str, int] = None,
-                 workers: int = 1,
-                 dtype: str = 'float32',
-                 **kwargs):
+
+    def __init__(
+        self,
+        version: str = "",
+        revision: str = "",
+        categories: Dict[str, int] = None,
+        road_structures: Dict[str, int] = None,
+        weather_conditions: Dict[str, int] = None,
+        time_zone: Dict[str, int] = None,
+        workers: int = 1,
+        dtype: str = "float32",
+        **kwargs,
+    ):
         self.version = version
         self.revision = revision
         self.categories = categories
@@ -51,7 +53,7 @@ class KRadarProcessor():
         self.dtype = dtype
 
         # Define dataset splits (based on the version)
-        self.splits = ['train', 'val', 'test']
+        self.splits = ["train", "val", "test"]
         if self.version:
             self.splits = [f"{self.version}_{s}" for s in self.splits]
 
@@ -74,7 +76,7 @@ class KRadarProcessor():
                 "Bicycle Group": 4,
                 "Pedestrian": 5,
                 "Pedestrian Group": 6,
-                "Background": 7
+                "Background": 7,
             }
 
         elif len(value) != 8:
@@ -111,7 +113,7 @@ class KRadarProcessor():
                 "parking_lots": 6,
                 "parkinglots": 6,
                 "shoulder": 7,
-                "countryside": 8
+                "countryside": 8,
             }
 
         elif len(value) != 8:
@@ -147,7 +149,7 @@ class KRadarProcessor():
                 "light_snow": 5,
                 "lightsnow": 5,
                 "heavy_snow": 6,
-                "heavysnow": 6
+                "heavysnow": 6,
             }
 
         elif len(value) != 7:
@@ -213,7 +215,7 @@ class KRadarProcessor():
 
     @classmethod
     def from_config(cls, config: Dict) -> KRadarProcessor:  # noqa: F821
-        return cls(**dict(config['computing'] | config['data']))
+        return cls(**dict(config["computing"] | config["data"]))
 
     def __call__(self, *args: Any, **kwargs: Any):
         self.prepare(*args, **kwargs)
@@ -233,12 +235,13 @@ class KRadarProcessor():
             os1_idx: Index of the associated os1-128 lidar data.
             camlrr_idx: Index of the associated left, right, rear camera data.
         """
-        with open(label_path, 'r') as f:
+        with open(label_path, "r") as f:
             line = f.readline()
 
-        seq_idx = label_path.split('/')[-3]
-        radar_idx, os2_idx, camf_idx, os1_idx, camlrr_idx = \
-            line.split(',')[0].split('=')[1].split('_')
+        seq_idx = label_path.split("/")[-3]
+        radar_idx, os2_idx, camf_idx, os1_idx, camlrr_idx = (
+            line.split(",")[0].split("=")[1].split("_")
+        )
 
         return seq_idx, radar_idx, os2_idx, camf_idx, os1_idx, camlrr_idx
 
@@ -252,14 +255,14 @@ class KRadarProcessor():
         Returns:
             List of sequence description tags.
         """
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             line = f.readline()
 
-        road_type, capture_time, climate = line.split(',')
+        road_type, capture_time, climate = line.split(",")
 
         return [road_type, capture_time, climate]
 
-    def get_dataset_paths(self, src: str) -> Dict[str, Dict[str, List[str]]]:
+    def get_dataset_paths(self, src_list: List) -> Dict[str, Dict[str, List[str]]]:
         """Returns the paths of all train and test labels.
 
         These files serve as central information to link sensor data
@@ -281,26 +284,31 @@ class KRadarProcessor():
         info_label = f"info_label_{self.revision}" if self.revision else "info_label"
 
         # List all sequences in the dataset
-        for seq in os.listdir(src):
-            # List all samples in the sequence
-            samples = set(glob(osp.join(src, seq, info_label, '*.txt')))
+        for src in src_list:
+            for seq in os.listdir(src):
+                # List all samples in the sequence
+                samples = set(glob(osp.join(src, seq, info_label, "*.txt")))
 
-            # Filter all samples according to split
-            for s in self.splits:
-                # Get current split
-                c_split = getattr(split, s)
+                # Filter all samples according to split
+                for s in self.splits:
+                    # Get current split
+                    c_split = getattr(split, s)
 
-                # Filter dataset paths
-                dataset_paths[s][seq] = \
-                    sorted(list((filter(
-                        lambda x: f"{seq}_{osp.splitext(osp.basename(x))[0]}" in c_split, samples
-                    ))))
+                    # Filter dataset paths
+                    dataset_paths[s][seq] = sorted(
+                        list(
+                            filter(
+                                lambda x: f"{seq}_{osp.splitext(osp.basename(x))[0]}"
+                                in c_split,
+                                samples,
+                            )
+                        )
+                    )
 
         return dataset_paths
 
     def get_sequence_paths(
-        self,
-        sequence: List[str]
+        self, sequence: List[str]
     ) -> Dict[str, Union[List[str], Dict[str, str]]]:
         """Returns the paths of all data belonging to a sequence.
 
@@ -325,23 +333,29 @@ class KRadarProcessor():
 
             # Construct sensor data paths
             sequence_paths[sample_id] = {}
-            sequence_paths[sample_id]['label'] = sample
-            sequence_paths[sample_id]['calib_radar_lidar'] = \
-                osp.join(base_path, 'info_calib', 'calib_radar_lidar.txt')
-            sequence_paths[sample_id]['calib_camera_lidar'] = \
-                osp.join(base_path, 'info_calib', 'calib_camera_lidar.txt')
-            sequence_paths[sample_id]['camera_front'] = \
-                osp.join(base_path, 'cam-front', 'cam-front_' + camf_idx + '.png')
-            sequence_paths[sample_id]['radar_tesseract'] = \
-                osp.join(base_path, 'radar_tesseract', 'tesseract_' + radar_idx + '.mat')
-            sequence_paths[sample_id]['os1'] = \
-                osp.join(base_path, 'os1-128', 'os1-128_' + os1_idx + '.pcd')
-            sequence_paths[sample_id]['os2'] = \
-                osp.join(base_path, 'os2-64', 'os2-64_' + os2_idx + '.pcd')
+            sequence_paths[sample_id]["label"] = sample
+            sequence_paths[sample_id]["calib_radar_lidar"] = osp.join(
+                base_path, "info_calib", "calib_radar_lidar.txt"
+            )
+            sequence_paths[sample_id]["calib_camera_lidar"] = osp.join(
+                base_path, "info_calib", "calib_camera_lidar.txt"
+            )
+            sequence_paths[sample_id]["camera_front"] = osp.join(
+                base_path, "cam-front", "cam-front_" + camf_idx + ".png"
+            )
+            sequence_paths[sample_id]["radar_tesseract"] = osp.join(
+                base_path, "radar_tesseract", "tesseract_" + radar_idx + ".mat"
+            )
+            sequence_paths[sample_id]["os1"] = osp.join(
+                base_path, "os1-128", "os1-128_" + os1_idx + ".pcd"
+            )
+            sequence_paths[sample_id]["os2"] = osp.join(
+                base_path, "os2-64", "os2-64_" + os2_idx + ".pcd"
+            )
 
         if sequence:
-            description_file = osp.join(base_path, 'description.txt')
-            sequence_paths['description'] = self.get_description(description_file)
+            description_file = osp.join(base_path, "description.txt")
+            sequence_paths["description"] = self.get_description(description_file)
 
         return sequence_paths
 
@@ -359,14 +373,16 @@ class KRadarProcessor():
             calibration: A homogeneous (4x4) transformation matrix.
         """
         # Load calibration file data
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         # Initialize homogeneous transformation matrix
         calibration_left = np.eye(4, dtype=self._dtype)
 
         # Assign camera transformation matrix
-        calibration_left[:3, :] = np.array(list(map(float, lines[1].split(',')))).reshape((3, 4))
+        calibration_left[:3, :] = np.array(
+            list(map(float, lines[1].split(",")))
+        ).reshape((3, 4))
 
         # Define stereo camera baseline according to spec sheet
         B = 0.12
@@ -388,7 +404,7 @@ class KRadarProcessor():
             calibration: A homogeneous (4x4) transformation matrix.
         """
         # Load calibration file data
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         # Initialize homogeneous transformation matrix
@@ -398,7 +414,7 @@ class KRadarProcessor():
         translation = np.zeros(3, dtype=self._dtype)
 
         # Map translation information from (frame difference, dx, dy) to (dx, dy, dz=0)
-        translation[:2] = np.array(list(map(float, lines[1].split(',')))[-2:])
+        translation[:2] = np.array(list(map(float, lines[1].split(",")))[-2:])
         calibration[:3, -1] = translation.T
 
         # Initialize transformation matrices for ra and ea projection
@@ -420,7 +436,7 @@ class KRadarProcessor():
             calibration: A homogeneous (4x4) transformation matrix.
         """
         # Load calibration file data
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         # Initialize homogeneous transformation matrix
@@ -430,7 +446,7 @@ class KRadarProcessor():
         translation = np.zeros(3, dtype=self._dtype)
 
         # Map translation information from (frame difference, dx, dy) to (dx, dy, dz=0)
-        translation[:2] = np.array(list(map(float, lines[1].split(',')))[-2:])
+        translation[:2] = np.array(list(map(float, lines[1].split(",")))[-2:])
         calibration[:3, -1] = translation.T
 
         return calibration
@@ -450,9 +466,9 @@ class KRadarProcessor():
         """
         # Transform bounding box center (translation)
         boxes[:, :3] = np.einsum(
-            'ij,...j->...i',
+            "ij,...j->...i",
             transformation,
-            np.column_stack((boxes[:, :3], np.ones(boxes.shape[0])))
+            np.column_stack((boxes[:, :3], np.ones(boxes.shape[0]))),
         )[:, :3]
 
         # TODO: Transform bounding box heading (rotation)
@@ -480,7 +496,7 @@ class KRadarProcessor():
             boxes: Array of bounding boxes (M, 9), with M being the number of boxes.
         """
         # Load label data
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         # Initialize bounding box array
@@ -488,10 +504,10 @@ class KRadarProcessor():
 
         # Parse label data (skip first info line)
         for i, line in enumerate(lines[1:]):
-            values = line.split(',')
+            values = line.split(",")
 
             # Skip invalid labels (header missing)
-            if values[0] != '*':
+            if values[0] != "*":
                 continue
 
             # There a two types of label formats
@@ -508,17 +524,19 @@ class KRadarProcessor():
                 continue
 
             # Assign to bounding box array
-            boxes[i, :] = np.array([
-                float(x),
-                float(y),
-                float(z),
-                np.deg2rad(float(theta)),
-                2 * float(l),
-                2 * float(w),
-                2 * float(h),
-                category_idx,
-                obj_id
-            ])
+            boxes[i, :] = np.array(
+                [
+                    float(x),
+                    float(y),
+                    float(z),
+                    np.deg2rad(float(theta)),
+                    2 * float(l),
+                    2 * float(w),
+                    2 * float(h),
+                    category_idx,
+                    obj_id,
+                ]
+            )
 
         # Filter invalid bounding boxes and return valid boxes
         return boxes[~np.all(boxes == 0, axis=1)]
@@ -559,12 +577,20 @@ class KRadarProcessor():
         pc_data = pc.pc_data
 
         # Convert point cloud to array
-        point_cloud = np.array([
-            pc_data["x"], pc_data["y"], pc_data["z"],
-            pc_data["intensity"], pc_data["t"],
-            pc_data["reflectivity"], pc_data["ring"],
-            pc_data["ambient"], pc_data["range"],
-        ], dtype=self._dtype).T
+        point_cloud = np.array(
+            [
+                pc_data["x"],
+                pc_data["y"],
+                pc_data["z"],
+                pc_data["intensity"],
+                pc_data["t"],
+                pc_data["reflectivity"],
+                pc_data["ring"],
+                pc_data["ambient"],
+                pc_data["range"],
+            ],
+            dtype=self._dtype,
+        ).T
 
         # Filter out missing values
         point_cloud = point_cloud[np.where(np.abs(point_cloud[:, 0]) > 0.01)]
@@ -582,7 +608,7 @@ class KRadarProcessor():
                 (doppler, range, elevation, azimuth)
         """
         # Load radar tesseract
-        tesseract: np.ndarray = loadmat(filename)['arr_zyx']
+        tesseract: np.ndarray = loadmat(filename)["arrDREA"]
 
         return tesseract.astype(self._dtype)
 
@@ -600,42 +626,59 @@ class KRadarProcessor():
             # Load radar tesseract with shape (doppler, range, elevation, azimuth)
             tesseract = self.get_radar_tesseract(filename)
 
-            tesseract = cp.array(tesseract)
+            tesseract = np.array(tesseract)
             # Convert radar responce to dB
-            tesseract = 10 * cp.log10(tesseract)
+            tesseract = 10 * np.log10(tesseract)
 
             # Reduce to range-azimuth plane
-            ra_rcs_max = cp.max(cp.max(tesseract, axis=2), axis=0)
-            ra_rcs_median = cp.median(cp.median(tesseract, axis=2), axis=0)
-            ra_rcs_var = cp.var(cp.var(tesseract, axis=2), axis=0)
+            ra_rcs_max = np.max(np.max(tesseract, axis=2), axis=0)
+            ra_rcs_median = np.median(np.median(tesseract, axis=2), axis=0)
+            ra_rcs_var = np.var(np.var(tesseract, axis=2), axis=0)
 
-            ra_doppler_max_idx = cp.argmax(cp.max(tesseract, axis=2), axis=0)
-            ra_doppler_max = cp.asarray(radar_info.doppler_raster)[ra_doppler_max_idx]
-            ra_doppler_median = cp.median(cp.max(tesseract, axis=2), axis=0)
-            ra_doppler_var = cp.var(cp.max(tesseract, axis=2), axis=0)
+            ra_doppler_max_idx = np.argmax(np.max(tesseract, axis=2), axis=0)
+            ra_doppler_max = np.asarray(radar_info.doppler_raster)[ra_doppler_max_idx]
+            ra_doppler_median = np.median(np.max(tesseract, axis=2), axis=0)
+            ra_doppler_var = np.var(np.max(tesseract, axis=2), axis=0)
 
             # Crop radar tesseract (to 4:252) in the range dimension due to fft artifacts
             tesseract = tesseract[:, 4:252, :, :]
 
             # Reduce to elevation-azimuth plane
-            ea_rcs_max = cp.max(cp.max(tesseract, axis=1), axis=0)
-            ea_rcs_median = cp.median(cp.median(tesseract, axis=1), axis=0)
-            ea_rcs_var = cp.var(cp.var(tesseract, axis=1), axis=0)
+            ea_rcs_max = np.max(np.max(tesseract, axis=1), axis=0)
+            ea_rcs_median = np.median(np.median(tesseract, axis=1), axis=0)
+            ea_rcs_var = np.var(np.var(tesseract, axis=1), axis=0)
 
-            ea_doppler_max_idx = cp.argmax(cp.max(tesseract, axis=1), axis=0)
-            ea_doppler_max = cp.asarray(radar_info.doppler_raster)[ea_doppler_max_idx]
-            ea_doppler_median = cp.mean(cp.max(tesseract, axis=1), axis=0)
-            ea_doppler_var = cp.var(cp.max(tesseract, axis=1), axis=0)
+            ea_doppler_max_idx = np.argmax(np.max(tesseract, axis=1), axis=0)
+            ea_doppler_max = np.asarray(radar_info.doppler_raster)[ea_doppler_max_idx]
+            ea_doppler_median = np.mean(np.max(tesseract, axis=1), axis=0)
+            ea_doppler_var = np.var(np.max(tesseract, axis=1), axis=0)
 
             # Stack radar features
-            ra = cp.dstack((ra_rcs_max, ra_rcs_median, ra_rcs_var,
-                            ra_doppler_max, ra_doppler_median, ra_doppler_var))
-            ea = cp.dstack((ea_rcs_max, ea_rcs_median, ea_rcs_var,
-                            ea_doppler_max, ea_doppler_median, ea_doppler_var))
+            ra = np.dstack(
+                (
+                    ra_rcs_max,
+                    ra_rcs_median,
+                    ra_rcs_var,
+                    ra_doppler_max,
+                    ra_doppler_median,
+                    ra_doppler_var,
+                )
+            )
+            ea = np.dstack(
+                (
+                    ea_rcs_max,
+                    ea_rcs_median,
+                    ea_rcs_var,
+                    ea_doppler_max,
+                    ea_doppler_median,
+                    ea_doppler_var,
+                )
+            )
 
-            return cp.asnumpy(ra), cp.asnumpy(ea)
+            return ra, ea
         except Exception as error:
-            print('Caught this error: ' + repr(error))
+            print("Caught this error: " + repr(error))
+
     def map_description(self, description: List[str]) -> np.ndarray:
         """Returns an encoded scene description.
 
@@ -646,11 +689,14 @@ class KRadarProcessor():
             Array of numerical scene description values according
             to the defined mapping.
         """
-        return np.array([
-            self._road_structures[description[0]],
-            self._time_zone[description[1]],
-            self._weather_conditions[description[2]]
-        ], dtype=self._dtype)
+        return np.array(
+            [
+                self._road_structures[description[0]],
+                self._time_zone[description[1]],
+                self._weather_conditions[description[2]],
+            ],
+            dtype=self._dtype,
+        )
 
     def prepare_sample(self, sample: Dict[str, str], description, dst: str) -> None:
         """Pre-processes a single data sample and saves the results.
@@ -661,8 +707,12 @@ class KRadarProcessor():
             dst: Destiantion directory to save the processed sample
                 data.
         """
+        if os.path.isdir(dst):
+            print(f"Directory {dst} already exists. Skipping sample.")
+            return
+
         # Load lable data
-        boxes = self.get_boxes(sample['label'])
+        boxes = self.get_boxes(sample["label"])
 
         # Skip samples without bounding boxes
         if not boxes.size:
@@ -672,37 +722,43 @@ class KRadarProcessor():
         description = self.map_description(description)
 
         # Load calibration data
-        ra_to_lidar, ea_to_lidar = self.get_radar_calibration(sample['calib_radar_lidar'])
-        # mono_to_lidar, stereo_to_lidar = self.get_camera_calibration(sample['calib_camera_lidar'])
+        ra_to_lidar, ea_to_lidar = self.get_radar_calibration(
+            sample["calib_radar_lidar"]
+        )
+        mono_to_lidar, stereo_to_lidar = self.get_camera_calibration(
+            sample["calib_camera_lidar"]
+        )
 
         # Transform bounding boxes to lidar frame
-        radar_to_lidar = self.get_translation(sample['calib_radar_lidar'])
+        radar_to_lidar = self.get_translation(sample["calib_radar_lidar"])
         boxes = self._transform_boxes(boxes, radar_to_lidar)
 
         # Load front camera data
-        camera_front_left, camera_front_right = self.get_camera_data(sample['camera_front'])
+        camera_front_left, camera_front_right = self.get_camera_data(
+            sample["camera_front"]
+        )
 
         # Load radar data (range-azimuth, elevation-azimuth)
-        ra, ea = self.get_radar_data(sample['radar_tesseract'])
+        ra, ea = self.get_radar_data(sample["radar_tesseract"])
 
         # Load lidar data
-        os1 = self.get_lidar_data(sample['os1'])
-        os2 = self.get_lidar_data(sample['os1'])
+        os1 = self.get_lidar_data(sample["os1"])
+        os2 = self.get_lidar_data(sample["os1"])
 
         # Save data
         os.makedirs(dst, exist_ok=True)
-        np.save(osp.join(dst, 'labels.npy'), boxes, allow_pickle=False)
-        np.save(osp.join(dst, 'description.npy'), description, allow_pickle=False)
-        cv2.imwrite(osp.join(dst, 'mono.jpg'), camera_front_left, self.jpg_quality)
-        # np.save(osp.join(dst, 'mono_info.npy'), mono_to_lidar, allow_pickle=False)
-        cv2.imwrite(osp.join(dst, 'stereo.jpg'), camera_front_right, self.jpg_quality)
-        # np.save(osp.join(dst, 'stereo_info.npy'), stereo_to_lidar, allow_pickle=False)
-        np.save(osp.join(dst, 'ra.npy'), ra, allow_pickle=False)
-        np.save(osp.join(dst, 'ra_info.npy'), ra_to_lidar, allow_pickle=False)
-        np.save(osp.join(dst, 'ea.npy'), ea, allow_pickle=False)
-        np.save(osp.join(dst, 'ea_info.npy'), ea_to_lidar, allow_pickle=False)
-        np.save(osp.join(dst, 'os1.npy'), os1, allow_pickle=False)
-        np.save(osp.join(dst, 'os2.npy'), os2, allow_pickle=False)
+        np.save(osp.join(dst, "labels.npy"), boxes, allow_pickle=False)
+        np.save(osp.join(dst, "description.npy"), description, allow_pickle=False)
+        cv2.imwrite(osp.join(dst, "mono.jpg"), camera_front_left, self.jpg_quality)
+        np.save(osp.join(dst, "mono_info.npy"), mono_to_lidar, allow_pickle=False)
+        cv2.imwrite(osp.join(dst, "stereo.jpg"), camera_front_right, self.jpg_quality)
+        np.save(osp.join(dst, "stereo_info.npy"), stereo_to_lidar, allow_pickle=False)
+        np.save(osp.join(dst, "ra.npy"), ra, allow_pickle=False)
+        np.save(osp.join(dst, "ra_info.npy"), ra_to_lidar, allow_pickle=False)
+        np.save(osp.join(dst, "ea.npy"), ea, allow_pickle=False)
+        np.save(osp.join(dst, "ea_info.npy"), ea_to_lidar, allow_pickle=False)
+        np.save(osp.join(dst, "os1.npy"), os1, allow_pickle=False)
+        np.save(osp.join(dst, "os2.npy"), os2, allow_pickle=False)
 
     def prepare_sequence(self, sequence: List[str], dst: str) -> None:
         """Pre-processes a single sequence by sample.
@@ -717,39 +773,53 @@ class KRadarProcessor():
         sequence_paths = self.get_sequence_paths(sequence)
 
         # Separate sequence description form samples
-        description = sequence_paths.pop('description')
+        description = sequence_paths.pop("description")
 
         # Execute sample processing concurrently
         with ThreadPoolExecutor(max_workers=self._workers) as e:
             e.map(
-                lambda item:
-                self.prepare_sample(item[1], description, osp.join(dst, item[0])),
-                sequence_paths.items()
+                lambda item: self.prepare_sample(
+                    item[1], description, osp.join(dst, item[0])
+                ),
+                sequence_paths.items(),
             )
 
-    def prepare(self, src: str, dst: str) -> None:
-        """Pre-processes and saves the data of the give dataset.
+    def prepare(self, src_list: list, dst: str) -> None:
+        """Pre-processes and saves the data of the given dataset.
 
         Arguments:
             src: Source path of the kradar dataset folder.
             dst: Destination path to save the processed dataset.
         """
         # Get dataset path
-        dataset_paths = self.get_dataset_paths(src)
+        dataset_paths = self.get_dataset_paths(src_list)
 
         # Get length of the full dataset
         full = f"{self.version}_full" if self.version else "full"
         total = len(getattr(split, full))
 
-        with tqdm(total=total) as pbar:
+        with tqdm(total=total, desc="Processing dataset") as pbar:
             for s in self.splits:
                 # Prepare data split
                 for seq_id, sequence in dataset_paths[s].items():
-                    # Prepare sequence data
-                    self.prepare_sequence(sequence, osp.join(dst, s, seq_id))
+                    # Check available memory in dst
+                    statvfs = os.statvfs(dst)
+                    free_space = statvfs.f_frsize * statvfs.f_bavail
 
-                    # Update progressbar
-                    pbar.update(len(dataset_paths[s][seq_id]))
+                    # Estimate required space (this is a rough estimate, adjust as needed)
+                    required_space = 3e9  # Example: 1GB required space
+
+                    if free_space < required_space:
+                        print(f"Not enough space in {dst}. Required: {required_space}, Available: {free_space}. Stopping.")
+                        return
+
+                    if not os.path.isdir(osp.join(dst, s, seq_id)) and len(sequence) > 0:
+                        self.prepare_sequence(sequence, osp.join(dst, s, seq_id))
+                    else:
+                        print(f"Skipping sequence {seq_id} in split {s}.")
+
+                    # Update progress bar
+                    pbar.update(len(sequence))
 
 
 def prepare_kradar(*args, **kwargs):
