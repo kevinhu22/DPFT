@@ -30,13 +30,13 @@ RUN apt-get update && apt-get install -y -q --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Build and install MultiScaleDeformableAttention
-RUN wget https://github.com/fundamentalvision/Deformable-DETR/archive/main.zip && \
-    unzip main.zip && \
-    cd Deformable-DETR-main/models/ops/ && \
-    sh ./make.sh && \
-    python -m pip install . && \
-    cd $WORKDIR \
- && rm -rf Deformable-DETR-main main.zip
+# RUN wget https://github.com/fundamentalvision/Deformable-DETR/archive/main.zip && \
+#     unzip main.zip && \
+#     cd Deformable-DETR-main/models/ops/ && \
+#     sh ./make.sh && \
+#     python -m pip install . && \
+#     cd $WORKDIR \
+#  && rm -rf Deformable-DETR-main main.zip
 
 # Install python packages
 COPY . $WORKDIR
