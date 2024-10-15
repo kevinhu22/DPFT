@@ -12,10 +12,305 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from scipy.io import loadmat
+from scipy import ndimage
+import scipy.ndimage.filters as filters
 from pypcd import pypcd
 
 from dprt.datasets.kradar.utils import radar_info
 from dprt.datasets.kradar.utils import split
+
+import matplotlib.pyplot as plt
+
+class CFAR:
+    def __init__(self, roi, type="pointcloud"):
+        """
+        * type in ['pointcloud', 'index', 'both']
+        """
+
+        ### Design parameters ###
+        # self.LARGE_VALUE = 1e+15
+        self.grid_size = 0.4  # [m]
+        self.n_half_guard_cell_zyx = [1, 2, 4]
+        self.n_half_train_cell_zyx = [4, 8, 16]
+
+        self.guard_cell_range_zyx = (
+            (2 * (np.array(self.n_half_guard_cell_zyx)) + 1) * self.grid_size
+        ).tolist()
+        self.boundary_cell_range_zyx = (
+            (
+                2 * (np.array(self.n_half_train_cell_zyx))
+                + 2 * (np.array(self.n_half_guard_cell_zyx))
+                + 1
+            )
+            * self.grid_size
+        ).tolist()
+
+        self.fa_rate = 0.05  # [m] for CA-CFAR
+        self.thr_rate = 0.02  # for OS-CFAR
+        ### Design parameters ###
+
+        self.roi = roi
+
+        self.arr_z_cb = np.arange(roi["z"][0], roi["z"][1], 0.4)
+        self.arr_y_cb = np.arange(roi["y"][0], roi["y"][1], 0.4)
+        self.arr_x_cb = np.arange(roi["x"][0], roi["x"][1], 0.4)
+
+        self.min_values = [np.min(self.arr_z_cb), np.min(self.arr_y_cb), np.min(self.arr_x_cb)]
+
+        ### Return mode ###
+        if type == "pointcloud":
+            self.mode = 0
+        elif type == "index":
+            self.mode = 1
+        elif type == "both":
+            self.mode = 2
+        ### Return mode ###
+
+        self.CA_CFAR = {
+            'FALSE_ALARM_RATE': 0.0005,
+            'GUARD_CELL_RAE': [4, 2, 2],
+            'TRAIN_CELL_RAE': [8, 4, 4],
+        }
+
+        self.OS_CFAR = {
+            'RATE': 0.05,
+            'PADDING_HALF_RA': [2, 1],
+        }
+
+        self.CA_CFAR_RA = {
+            'FALSE_ALARM_RATE': 0.0005,
+            'GUARD_CELL_RA': [4, 2],
+            'TRAIN_CELL_RA': [8, 4],
+            'VAL_Z': 0.5,
+        }
+
+    def _get_ca_cfar_idx_from_cube(self, cube_pw:np.array)->tuple:
+        cfg_cfar_ra = self.CA_CFAR_RA
+        cube_pw_norm = cube_pw/1.e+13 # preventing overflow
+
+        nh_g_x, nh_g_y = cfg_cfar_ra["GUARD_CELL_RA"]
+        nh_t_x, nh_t_y = cfg_cfar_ra["TRAIN_CELL_RA"] 
+        mask_size = (2*(nh_g_x+nh_t_x)+1, 2*(nh_g_y+nh_t_y)+1) # 1 for own
+        mask = np.ones(mask_size)
+        mask[nh_t_x:nh_t_x+2*nh_g_x+1, nh_t_y:nh_t_y+2*nh_g_y+1] = 0
+        num_total_train_cells = np.count_nonzero(mask)
+        mask = mask/num_total_train_cells
+        
+        conv_out = ndimage.convolve(cube_pw_norm, mask, mode='constant')
+        alpha = num_total_train_cells * (cfg_cfar_ra["FALSE_ALARM_RATE"]**(-1/num_total_train_cells)-1)
+        conv_out = alpha * conv_out
+        bool_cfar_target = np.greater(cube_pw_norm, conv_out)
+        
+        return np.where(bool_cfar_target==True)
+
+    def ca_cfar(self, tesseract):
+        # tesseract_norm = tesseract.copy()
+
+        # nh_g, nh_t = self.n_half_guard_cell_zyx[0], self.n_half_train_cell_zyx[0]
+        # mask_size = (2 * (nh_g + nh_t) + 1, 2 * (nh_g + nh_t) + 1)  # 1 for own
+        # mask = np.ones(mask_size)
+        # mask[nh_t:nh_t + 2 * nh_g + 1, nh_t:nh_t + 2 * nh_g + 1] = 0
+        # num_total_train_cells = np.count_nonzero(mask)
+        # mask = mask / num_total_train_cells
+
+        # alpha = num_total_train_cells * (self.fa_rate ** (-1 / num_total_train_cells) - 1)
+        
+        # conv_out = ndimage.convolve(tesseract_norm, mask, mode='mirror')
+        # conv_out = alpha * conv_out
+
+        # out = np.greater(tesseract_norm, conv_out)
+        # pc_idx = np.where(out == True)
+        # correp_power = tesseract[pc_idx]  # Unnormalized
+
+        # ### To point cloud ###
+        # min_x, min_y = self.min_values[:2]
+        # indices_x, indices_y = pc_idx
+        # pc_x = min_x + indices_x * self.grid_size + self.grid_size / 2.0
+        # pc_y = min_y + indices_y * self.grid_size + self.grid_size / 2.0
+        
+        # total_values = np.concatenate([pc_x.reshape(-1, 1), pc_y.reshape(-1, 1), correp_power.reshape(-1, 1)], axis=1)
+        # # Filter the power is -1.
+        # total_values = np.array(list(filter(lambda x: x[2] != -1.0, total_values.tolist())))
+        # ### To point cloud ###
+
+        # if self.mode == 0:
+        #     return total_values  # X, Y, PW
+        # elif self.mode == 1:
+        #     return pc_idx
+        # elif self.mode == 2:
+        #     return total_values, pc_idx
+
+        local_maxima_reference_cells = 5
+        cfar_factor = 0.99
+        cfar_offset = 20
+        cfar_reference_cells = 30
+        cfar_guard_cells = 5
+        power_threshold = -150
+
+        # Apply maximum filter to find local maxima
+        data_max = filters.maximum_filter(tesseract,
+                                        size=(local_maxima_reference_cells, local_maxima_reference_cells),
+                                        mode="mirror")
+
+        local_maxima = np.array(np.where(tesseract == data_max)).astype(int)
+
+        predetections = []
+        rows, cols = local_maxima.shape
+        filtered_indices = []
+
+        for c in range(cols):
+            index_r, index_c = local_maxima[:, c]
+
+            # Ensure indices are within bounds
+            r_start = max(index_r - cfar_reference_cells - cfar_guard_cells, 0)
+            r_end = max(index_r - cfar_guard_cells, 0)
+            c_start = max(index_c - cfar_reference_cells - cfar_guard_cells, 0)
+            c_end = max(index_c - cfar_guard_cells, 0)
+
+            # Calculate mean of reference cells
+            reference_cells = tesseract[r_start:r_end, c_start:c_end]
+            if reference_cells.size == 0:
+                continue
+
+            mean = np.mean(reference_cells)
+            cell_under_test = tesseract[index_r, index_c]
+
+            # Apply CFAR thresholding
+            if cell_under_test > (mean * cfar_factor + cfar_offset) and cell_under_test > power_threshold:
+                filtered_indices.append([index_r, index_c])
+
+        predetections = np.array(filtered_indices)
+
+        return predetections
+        # # generating 3D mask
+        # nh_g_z, nh_g_y, nh_g_x = self.n_half_guard_cell_zyx
+        # nh_t_z, nh_t_y, nh_t_x = self.n_half_train_cell_zyx
+        # mask_size = (
+        #     2 * (nh_g_z + nh_t_z) + 1,
+        #     2 * (nh_g_y + nh_t_y) + 1,
+        #     2 * (nh_g_x + nh_t_x) + 1,
+        # )  # 1 for own
+        # mask = np.ones(mask_size)
+        # mask[
+        #     nh_t_z : nh_t_z + 2 * nh_g_z + 1,
+        #     nh_t_y : nh_t_y + 2 * nh_g_y + 1,
+        #     nh_t_x : nh_t_x + 2 * nh_g_x + 1,
+        # ] = 0
+        # num_total_train_cells = np.count_nonzero(mask)
+        # mask = mask / num_total_train_cells
+
+        # alpha = num_total_train_cells * (
+        #     self.fa_rate ** (-1 / num_total_train_cells) - 1
+        # )
+
+        # conv_out = ndimage.convolve(cube_norm, mask, mode="mirror")
+        # conv_out = alpha * conv_out
+
+        # out = np.greater(cube_norm, conv_out)
+        # pc_idx = np.where(out == True)
+        # correp_power = cube[pc_idx]  # Unnormalized
+
+        # ### To point cloud ###
+        # min_z, min_y, min_x = self.min_values
+        # indices_z, indices_y, indices_x = pc_idx
+        # pc_z = min_z + indices_z * self.grid_size + self.grid_size / 2.0
+        # pc_y = min_y + indices_y * self.grid_size + self.grid_size / 2.0
+        # pc_x = min_x + indices_x * self.grid_size + self.grid_size / 2.0
+
+        # total_values = np.concatenate(
+        #     [
+        #         pc_x.reshape(-1, 1),
+        #         pc_y.reshape(-1, 1),
+        #         pc_z.reshape(-1, 1),
+        #         correp_power.reshape(-1, 1),
+        #     ],
+        #     axis=1,
+        # )
+        # # fliter the power is -1.
+        # total_values = np.array(
+        #     list(filter(lambda x: x[3] != -1.0, total_values.tolist()))
+        # )
+        # ### To point cloud ###
+        
+        # if self.mode == 0:
+        #     return total_values  # X, Y, Z, PW
+        # elif self.mode == 1:
+        #     return pc_idx
+        # elif self.mode == 2:
+        #     return total_values, pc_idx
+
+    # def os_cfar(self, cube):
+    #     invalid_idx = np.where(cube == -1.0)
+
+    #     # normalize cube & make power level realy high or (set as representive value: mean) to invalid idx to make threshold high to edge part
+    #     cube_norm = cube.copy()
+    #     cube_norm[invalid_idx] = 0
+    #     cube_norm = (cube_norm) / 1e13
+    #     # cube_norm[invalid_idx] = self.LARGE_VALUE
+    #     cube_norm[invalid_idx] = np.mean(cube_norm)
+
+    #     # generating 3D mask
+    #     nh_g_z, nh_g_y, nh_g_x = self.n_half_guard_cell_zyx
+    #     nh_t_z, nh_t_y, nh_t_x = self.n_half_train_cell_zyx
+
+    #     margin_z = nh_g_z + nh_t_z
+    #     margin_y = nh_g_y + nh_t_y
+    #     margin_x = nh_g_x + nh_t_x
+
+    #     out = np.zeros_like(cube)
+
+    #     n_z, n_y, n_x = out.shape
+
+    #     for idx_z in range(margin_z, n_z - margin_z):
+    #         for idx_y in range(margin_y, n_y - margin_y):
+    #             for idx_x in range(margin_x, n_x - margin_x):
+    #                 mask = cube_norm[
+    #                     idx_z - margin_z : idx_z + margin_z + 1,
+    #                     idx_y - margin_y : idx_y + margin_y + 1,
+    #                     idx_x - margin_x : idx_x + margin_x + 1,
+    #                 ].copy()
+    #                 mask[
+    #                     nh_t_z : nh_t_z + 2 * nh_g_z + 1,
+    #                     nh_t_y : nh_t_y + 2 * nh_g_y + 1,
+    #                     nh_t_x : nh_t_x + 2 * nh_g_x + 1,
+    #                 ] = -1
+    #                 arr = mask[np.where(mask != -1.0)]
+    #                 thr = np.quantile(arr, 1 - self.thr_rate)
+    #                 out[idx_z, idx_y, idx_x] = (
+    #                     1 if cube_norm[idx_z, idx_y, idx_x] > thr else 0
+    #                 )
+
+    #     pc_idx = np.where(out == 1)
+    #     correp_power = cube[pc_idx]  # Unnormalized
+
+    #     ### To point cloud ###
+    #     min_z, min_y, min_x = self.min_values
+    #     indices_z, indices_y, indices_x = pc_idx
+    #     pc_z = min_z + indices_z * self.grid_size + self.grid_size / 2.0
+    #     pc_y = min_y + indices_y * self.grid_size + self.grid_size / 2.0
+    #     pc_x = min_x + indices_x * self.grid_size + self.grid_size / 2.0
+
+    #     total_values = np.concatenate(
+    #         [
+    #             pc_x.reshape(-1, 1),
+    #             pc_y.reshape(-1, 1),
+    #             pc_z.reshape(-1, 1),
+    #             correp_power.reshape(-1, 1),
+    #         ],
+    #         axis=1,
+    #     )
+    #     # fliter the power is -1.
+    #     total_values = np.array(
+    #         list(filter(lambda x: x[3] != -1.0, total_values.tolist()))
+    #     )
+    #     ### To point cloud ###
+
+    #     if self.mode == 0:
+    #         return total_values  # X, Y, Z, PW
+    #     elif self.mode == 1:
+    #         return pc_idx
+    #     elif self.mode == 2:
+    #         return total_values, pc_idx
 
 
 class KRadarProcessor:
@@ -679,6 +974,123 @@ class KRadarProcessor:
         except Exception as error:
             print("Caught this error: " + repr(error))
 
+    def get_radar_data_revised(self, filename: str, cfg) -> np.array:
+        """Returns the RA and EA projection of the 4D radar tesseract.
+
+        Arguments:
+            filename: Filename of the 4D radar tesseract mat file.
+
+        Returns:
+            ra: Range-Azimuth projection of the 4D radar tesseract.
+            ea: Elevation-Azimuth projection of the 4D radar tesseract.
+        """
+        try:
+            # Load radar tesseract with shape (doppler, range, elevation, azimuth)
+            tesseract = self.get_radar_tesseract(filename)
+            tesseract = np.array(tesseract)
+            invalid_idx = np.where(tesseract == -1.0)
+            if invalid_idx[0].size != 0:
+                print("Cube has invalid values")
+
+            if np.any(tesseract <= 0):
+                print("Warning: Tesseract contains zero or negative values, which may cause log10 issues.")
+                # tesseract = np.where(tesseract > 0, tesseract, np.nan)  # Replace non-positive values with NaN
+            
+            # Convert radar responce to dB
+            # tesseract = 10 * np.log10(tesseract)
+            
+            RD_map = tesseract.mean(axis=(2, 3))    # D R
+
+            # cfar(RD_map)
+            roi = cfg["data"]["fov"]
+            cls_cfar = CFAR(roi, type="index")
+            
+            predetections = cls_cfar._get_ca_cfar_idx_from_cube(RD_map)
+
+            RD_map = 10 * np.log10(RD_map)
+
+            predetections_v2 = cls_cfar.ca_cfar(RD_map)
+            
+            if len(predetections[0]) > 0:  # Check if there are any detections
+                try:
+                    plt.figure(figsize=(10, 6))
+                    plt.imshow(RD_map, aspect='auto', origin='lower', cmap='viridis')
+                    plt.colorbar(label='Amplitude (dB)')
+                    plt.xlabel('Range')
+                    plt.ylabel('Doppler')
+                    plt.title('2D Range-Doppler Map')
+
+                    # Convert tuple of arrays to a 2D array for plotting
+                    predetections_array = np.column_stack(predetections)
+                    print(len(predetections_array), "CFAR 1 detections found")
+                    print(len(predetections_v2[:, 1],), "CFAR 2 detections found")
+                    # Add markers for the peaks
+                    plt.scatter(predetections_array[:, 1], predetections_array[:, 0], color='red', marker='x') 
+                    if len(predetections_v2) > 0:
+                        plt.scatter(predetections_v2[:, 1], predetections_v2[:, 0], color='pink', marker='x')
+                    # Save the entire plot with all decorations
+                    plt.savefig("/app/outputs/" + filename.split("/radar_tesseract/")[0].split("/")[-1] + "_" + filename.split("tesseract_")[-1].split(".mat")[0] + "_2D_RD_map.png")
+                    plt.show()
+                except Exception as e:
+                    print(f"{filename} failed to plot 2D RD map: {e}")
+            else:
+                print("No detections found")
+
+            for rd_ind in predetections_v2:
+                AE_map = tesseract[rd_ind[1], rd_ind[0], :, :]
+
+
+
+            #### to do!
+            # Reduce to range-azimuth plane
+            ra_rcs_max = np.max(np.max(tesseract, axis=2), axis=0)
+            ra_rcs_median = np.median(np.median(tesseract, axis=2), axis=0)
+            ra_rcs_var = np.var(np.var(tesseract, axis=2), axis=0)
+
+            ra_doppler_max_idx = np.argmax(np.max(tesseract, axis=2), axis=0)
+            ra_doppler_max = np.asarray(radar_info.doppler_raster)[ra_doppler_max_idx]
+            ra_doppler_median = np.median(np.max(tesseract, axis=2), axis=0)
+            ra_doppler_var = np.var(np.max(tesseract, axis=2), axis=0)
+
+            # Crop radar tesseract (to 4:252) in the range dimension due to fft artifacts
+            tesseract = tesseract[:, 4:252, :, :]
+
+            # Reduce to elevation-azimuth plane
+            ea_rcs_max = np.max(np.max(tesseract, axis=1), axis=0)
+            ea_rcs_median = np.median(np.median(tesseract, axis=1), axis=0)
+            ea_rcs_var = np.var(np.var(tesseract, axis=1), axis=0)
+
+            ea_doppler_max_idx = np.argmax(np.max(tesseract, axis=1), axis=0)
+            ea_doppler_max = np.asarray(radar_info.doppler_raster)[ea_doppler_max_idx]
+            ea_doppler_median = np.mean(np.max(tesseract, axis=1), axis=0)
+            ea_doppler_var = np.var(np.max(tesseract, axis=1), axis=0)
+
+            # Stack radar features
+            ra = np.dstack(
+                (
+                    ra_rcs_max,
+                    ra_rcs_median,
+                    ra_rcs_var,
+                    ra_doppler_max,
+                    ra_doppler_median,
+                    ra_doppler_var,
+                )
+            )
+            ea = np.dstack(
+                (
+                    ea_rcs_max,
+                    ea_rcs_median,
+                    ea_rcs_var,
+                    ea_doppler_max,
+                    ea_doppler_median,
+                    ea_doppler_var,
+                )
+            )
+
+            return ra, ea
+        except Exception as error:
+            print("Caught this error: " + repr(error))
+
     def map_description(self, description: List[str]) -> np.ndarray:
         """Returns an encoded scene description.
 
@@ -707,8 +1119,10 @@ class KRadarProcessor:
             dst: Destiantion directory to save the processed sample
                 data.
         """
-        if os.path.isdir(dst):
-            print(f"Directory {dst} already exists. Skipping sample.")
+        if os.path.exists(osp.join(dst, "ra.npy")):
+            print(
+                f"Directory {osp.join(dst, 'ra.npy')} already exists. Skipping sample."
+            )
             return
 
         # Load lable data
@@ -760,7 +1174,30 @@ class KRadarProcessor:
         np.save(osp.join(dst, "os1.npy"), os1, allow_pickle=False)
         np.save(osp.join(dst, "os2.npy"), os2, allow_pickle=False)
 
-    def prepare_sequence(self, sequence: List[str], dst: str) -> None:
+    def prepare_radar_sample(
+        self, sample: Dict[str, str], description, dst: str, cfg=None
+    ) -> None:
+        """Pre-processes a single radar data sample and saves the results.
+
+        Arguments:
+            sample: Dictionary with all file paths belonging to a
+                single sample.
+            dst: Destiantion directory to save the processed sample
+                data.
+        """
+
+        # if os.path.exists(osp.join(dst, "ra.npy")):
+        #     print(f"Directory {osp.join(dst, "ra.npy")} already exists. Skipping sample.")
+        #     return
+        # Load radar data (range-azimuth, elevation-azimuth)
+        ra, ea = self.get_radar_data_revised(sample["radar_tesseract"], cfg)
+
+        # Save data
+        # os.makedirs(dst, exist_ok=True)
+        # np.save(osp.join(dst, "ra.npy"), ra, allow_pickle=False)
+        # np.save(osp.join(dst, "ea.npy"), ea, allow_pickle=False)
+
+    def prepare_sequence(self, sequence: List[str], dst: str, cfg=None) -> None:
         """Pre-processes a single sequence by sample.
 
         Arguments:
@@ -778,13 +1215,13 @@ class KRadarProcessor:
         # Execute sample processing concurrently
         with ThreadPoolExecutor(max_workers=self._workers) as e:
             e.map(
-                lambda item: self.prepare_sample(
-                    item[1], description, osp.join(dst, item[0])
+                lambda item: self.prepare_radar_sample(
+                    item[1], description, osp.join(dst, item[0]), cfg
                 ),
                 sequence_paths.items(),
             )
 
-    def prepare(self, src_list: list, dst: str) -> None:
+    def prepare(self, src_list: list, dst: str, cfg=None) -> None:
         """Pre-processes and saves the data of the given dataset.
 
         Arguments:
@@ -810,13 +1247,20 @@ class KRadarProcessor:
                     required_space = 3e9  # Example: 1GB required space
 
                     if free_space < required_space:
-                        print(f"Not enough space in {dst}. Required: {required_space}, Available: {free_space}. Stopping.")
+                        print(
+                            f"Not enough space in {dst}. Required: {required_space}, Available: {free_space}. Stopping."
+                        )
                         return
 
-                    if not os.path.isdir(osp.join(dst, s, seq_id)) and len(sequence) > 0:
-                        self.prepare_sequence(sequence, osp.join(dst, s, seq_id))
-                    else:
-                        print(f"Skipping sequence {seq_id} in split {s}.")
+                    # if (
+                    #     not os.path.isdir(osp.join(dst, s, seq_id))
+                    #     and len(sequence) > 0
+                    # ):
+                    #     self.prepare_sequence(sequence, osp.join(dst, s, seq_id))
+                    # else:
+                    #     print(f"Skipping sequence {seq_id} in split {s}.")
+                    if len(sequence) > 0:
+                        self.prepare_sequence(sequence, osp.join(dst, s, seq_id), cfg)
 
                     # Update progress bar
                     pbar.update(len(sequence))

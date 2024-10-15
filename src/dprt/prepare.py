@@ -32,7 +32,7 @@ def main(src: List[Path], cfg: Path, dst: Path) -> None:
     # Prepare dataset
     preperator = prepare(config["dataset"], config)
 
-    preperator.prepare(src, dst)
+    preperator.prepare(src, dst, config)
 
 
 if __name__ == "__main__":
