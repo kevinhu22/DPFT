@@ -1,5 +1,6 @@
 import argparse
-
+from pathlib import Path
+from typing import List
 import numpy as np
 
 from dprt.datasets import prepare
@@ -27,7 +28,7 @@ def main(src: str, cfg: str, dst: str):
             break
 
     # Get calibration information
-    trans, rot = preperator.get_calibration(sample['calibration'])
+    # trans, rot = preperator.get_calibration(sample['calibration'])
 
     # Load front camera data
     camera_front, _ = preperator.get_camera_data(sample['camera_front'])
@@ -46,27 +47,39 @@ def main(src: str, cfg: str, dst: str):
 
     # Get radar sensor information
     raster = {
-        'r': radar_info.range_raster,
-        'e': radar_info.elevation_raster,
         'a': radar_info.azimuth_raster,
-        'd': radar_info.doppler_raster
+        'd': radar_info.doppler_raster,
+        'e': radar_info.elevation_raster,
+        'r': radar_info.range_raster,
     }
 
     # Transform boxes to radar frame
-    tm =get_transformation(trans, rot, inverse=True)
+    tm = preperator.get_translation(sample['calib_radar_lidar'])
     boxes = transform_boxes(boxes, tm)
 
     # Define region of interest
     point_cloud = transform_points(point_cloud, tm)
 
     # Visualize radar data
-    visu.visu_radar_tesseract(tesseract, dims='ea', raster=raster, points=point_cloud, boxes=boxes, roi=True, cart=True, aggregation_func=np.max)
-    
+    visu.visu_radar_tesseract(tesseract, dims='ae', raster=raster, points=point_cloud, boxes=boxes, roi=True, cart=False, aggregation_func=np.max)
+    visu.visu_radar_tesseract(tesseract, dims='ae', raster=raster, points=point_cloud, boxes=boxes, roi=True, cart=True, aggregation_func=np.max)
 
 if __name__ == '__main__':
+
+    default_src = [
+        Path("/data/Samsung 8TB 1"),
+        Path("/data/Samsung 500GB"),
+        Path("/data/Samsung 8TB 2"),
+    ]
+
     parser = argparse.ArgumentParser('DPRT data preprocessing')
-    parser.add_argument('--src', type=str, default='/data/kradar/raw',
-                        help="Path to the raw dataset folder.")
+    parser.add_argument(
+        "--src",
+        type=Path,
+        nargs="+",
+        default=default_src,
+        help="Paths to the raw dataset folders.",
+    )
     parser.add_argument('--cfg', type=str, default='/app/config/kradar.json',
                         help="Path to the configuration file.")
     parser.add_argument('--dst', type=str, default='/data/kradar/processed',
