@@ -1,4 +1,5 @@
 import argparse
+import wandb
 
 from dprt.datasets import init
 from dprt.datasets import load
@@ -17,7 +18,7 @@ def main(src: str, cfg: str, checkpoint: str, dst: str):
     """
     # Load dataset configuration
     config = load_config(cfg)
-
+    
     # Set global random seed
     set_seed(config['computing']['seed'])
 
@@ -28,7 +29,8 @@ def main(src: str, cfg: str, checkpoint: str, dst: str):
     test_loader = load(test_dataset, config=config)
 
     # Evaluate model at checkpoint
-    evaluate(config)(checkpoint, test_loader, dst)
+    evaluate(config)(checkpoint, test_loader, dst, config)
+    
 
 
 if __name__ == '__main__':
@@ -37,7 +39,7 @@ if __name__ == '__main__':
                         help="Path to the processed dataset folder.")
     parser.add_argument('--cfg', type=str, default='/app/config/kradar.json',
                         help="Path to the configuration file.")
-    parser.add_argument('--checkpoint', type=str, default='/app/log/20241009-141350-668/checkpoints/20241009-141350-668_checkpoint_0199.pt',
+    parser.add_argument('--checkpoint', type=str, default='/app/log/20241017-081549-441/checkpoints/20241017-081549-441_checkpoint_0199.pt',
                         help="Path to save the evaluation log.")
     parser.add_argument('--dst', type=str, default='/app/log',
                         help="Path to save the processed dataset.")

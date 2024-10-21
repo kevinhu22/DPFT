@@ -7,7 +7,7 @@ import os.path as osp
 from typing import Any, Dict, Iterable, List
 
 import torch
-
+import wandb
 from tqdm import trange
 from torch.utils.tensorboard import SummaryWriter
 
@@ -17,16 +17,18 @@ from dprt.training.loss import build_loss
 from dprt.training.scheduler import build_scheduler
 
 
-class CentralizedTrainer():
-    def __init__(self,
-                 epochs: int = 1,
-                 optimizer: torch.optim.Optimizer = None,
-                 loss: torch.nn.modules.loss._Loss = None,
-                 scheduler: torch.optim.lr_scheduler._LRScheduler = None,
-                 metric: torch.nn.modules.loss._Loss = None,
-                 device: str = None,
-                 logging: str = None,
-                 evaluating: int = 1):
+class CentralizedTrainer:
+    def __init__(
+        self,
+        epochs: int = 1,
+        optimizer: torch.optim.Optimizer = None,
+        loss: torch.nn.modules.loss._Loss = None,
+        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+        metric: torch.nn.modules.loss._Loss = None,
+        device: str = None,
+        logging: str = None,
+        evaluating: int = 1,
+    ):
         """
         Arguments:
             logging: Logging frequency. One of either None,
@@ -47,28 +49,21 @@ class CentralizedTrainer():
         self.evaluating = evaluating
 
     @classmethod
-    def from_config(cls,
-                    config: Dict[str, Any],
-                    *args,
-                    **kwargs) -> CentralizedTrainer:  # noqa: F821
+    def from_config(
+        cls, config: Dict[str, Any], *args, **kwargs
+    ) -> CentralizedTrainer:  # noqa: F821
         # Get trainer atributes
-        epochs = config['train']['epochs']
+        epochs = config["train"]["epochs"]
         optimizer = build_optimizer(
-            config['train']['optimizer'].pop('name'),
-            **config['train']['optimizer']
+            config["train"]["optimizer"].pop("name"), **config["train"]["optimizer"]
         )
-        loss = build_loss(
-            config['train']
-        )
+        loss = build_loss(config["train"])
         scheduler = build_scheduler(
-            config['train']['scheduler'].pop('name'),
-            **config['train']['scheduler']
+            config["train"]["scheduler"].pop("name"), **config["train"]["scheduler"]
         )
-        metric = build_metric(
-            config['evaluate']
-        )
-        device = torch.device(config['computing']['device'])
-        logging = config['train'].get('logging')
+        metric = build_metric(config["evaluate"])
+        device = torch.device(config["computing"]["device"])
+        logging = config["train"].get("logging")
 
         return cls(
             epochs=epochs,
@@ -77,14 +72,16 @@ class CentralizedTrainer():
             scheduler=scheduler,
             metric=metric,
             device=device,
-            logging=logging
+            logging=logging,
         )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.train(*args, **kwargs)
 
     @staticmethod
-    def log_scalars(writer, scalars: Dict[str, Any], epoch: int, prefix: str = None) -> None:
+    def log_scalars(
+        writer, scalars: Dict[str, Any], epoch: int, prefix: str = None
+    ) -> None:
         # Get prefix
         prefix = f"{prefix}/" if prefix is not None else ""
 
@@ -96,9 +93,14 @@ class CentralizedTrainer():
     def _dict_to(data: Dict[str, torch.Tensor], device) -> Dict[str, torch.Tensor]:
         return {k: v.to(device) for k, v in data.items()}
 
-    def train_one_epoch(self, epoch: int, model: torch.nn.Module,
-                        data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                        writer: SummaryWriter = None) -> None:
+    def train_one_epoch(
+        self,
+        epoch: int,
+        model: torch.nn.Module,
+        data_loader: Iterable,
+        optimizer: torch.optim.Optimizer,
+        writer: SummaryWriter = None,
+    ) -> None:
         # Make sure gradient tracking is on
         model.train()
 
@@ -107,16 +109,18 @@ class CentralizedTrainer():
 
         for i, (data, labels) in enumerate(data_loader):
             # Log learning rate
-            if self.logging == 'step':
-                writer.add_scalar('train/learning_rate',
-                                  optimizer.param_groups[0]['lr'],
-                                  i + epoch * len(data_loader))
+            if self.logging == "step":
+                writer.add_scalar(
+                    "train/learning_rate",
+                    optimizer.param_groups[0]["lr"],
+                    i + epoch * len(data_loader),
+                )
 
             # Load data and labels (to device)
-            labels: List[Dict[str, torch.Tensor]] = \
-                [self._dict_to(label, self.device) for label in labels]
-            data: Dict[str, torch.Tensor] = \
-                self._dict_to(data, self.device)
+            labels: List[Dict[str, torch.Tensor]] = [
+                self._dict_to(label, self.device) for label in labels
+            ]
+            data: Dict[str, torch.Tensor] = self._dict_to(data, self.device)
 
             # Zero gradients
             optimizer.zero_grad()
@@ -136,32 +140,48 @@ class CentralizedTrainer():
             metrics = self.eval_fn(output, labels)
 
             # Add prefix to loss values (logging)
-            losses = {f'loss_{k}': v for k, v in losses.items()}
-            losses['loss'] = loss
+            losses = {f"loss_{k}": v for k, v in losses.items()}
+            losses["loss"] = loss
 
             # Log training step
-            if self.logging == 'step':
-                self.log_scalars(writer, losses, i + epoch * len(data_loader), 'train')
-                self.log_scalars(writer, metrics, i + epoch * len(data_loader), 'train')
+            if self.logging == "step":
+                self.log_scalars(writer, losses, i + epoch * len(data_loader), "train")
+                self.log_scalars(writer, metrics, i + epoch * len(data_loader), "train")
+                wandb.log(
+                    {
+                        **losses,
+                        **metrics,
+                        "epoch": epoch,
+                        "step": i + epoch * len(data_loader),
+                    }
+                )
 
             # Add values to epoch log
-            if self.logging == 'epoch':
+            if self.logging == "epoch":
                 for k, v in losses.items():
                     scalars[k] = scalars.get(k, 0) + v
                 for k, v in metrics.items():
                     scalars[k] = scalars.get(k, 0) + v
 
-        if self.logging == 'epoch':
+        if self.logging == "epoch":
             # Average epoch logs
             scalars = {k: v / (i + 1) for k, v in scalars.items()}
 
             # Write epoch logs
-            self.log_scalars(writer, scalars, epoch, 'train')
-            writer.add_scalar('train/learning_rate', optimizer.param_groups[0]['lr'], epoch)
+            self.log_scalars(writer, scalars, epoch, "train")
+            writer.add_scalar(
+                "train/learning_rate", optimizer.param_groups[0]["lr"], epoch
+            )
+            wandb.log({**scalars, "epoch": epoch})
 
     @torch.no_grad()
-    def validate_one_epoch(self, epoch: int, model: torch.nn.Module, data_loader: Iterable,
-                           writer: SummaryWriter = None) -> Dict[str, float]:
+    def validate_one_epoch(
+        self,
+        epoch: int,
+        model: torch.nn.Module,
+        data_loader: Iterable,
+        writer: SummaryWriter = None,
+    ) -> Dict[str, float]:
         # Make sure the model is in evaluation mode
         model.eval()
         self.loss_fn.eval()
@@ -171,10 +191,10 @@ class CentralizedTrainer():
 
         for i, (data, labels) in enumerate(data_loader):
             # Load data and labels (to device)
-            labels: List[Dict[str, torch.Tensor]] = \
-                [self._dict_to(label, self.device) for label in labels]
-            data: Dict[str, torch.Tensor] = \
-                self._dict_to(data, self.device)
+            labels: List[Dict[str, torch.Tensor]] = [
+                self._dict_to(label, self.device) for label in labels
+            ]
+            data: Dict[str, torch.Tensor] = self._dict_to(data, self.device)
 
             # Make prediction
             output = model(data)
@@ -186,13 +206,21 @@ class CentralizedTrainer():
             metrics = self.eval_fn(output, labels)
 
             # Add prefix to loss values (logging)
-            losses = {f'loss_{k}': v for k, v in losses.items()}
-            losses['loss'] = loss
+            losses = {f"loss_{k}": v for k, v in losses.items()}
+            losses["loss"] = loss
 
-            # Log training step
-            if self.logging == 'step':
-                self.log_scalars(writer, losses, i + epoch * len(data_loader), 'val')
-                self.log_scalars(writer, metrics, i + epoch * len(data_loader), 'val')
+            # Log validation step
+            if self.logging == "step":
+                self.log_scalars(writer, losses, i + epoch * len(data_loader), "val")
+                self.log_scalars(writer, metrics, i + epoch * len(data_loader), "val")
+                wandb.log(
+                    {
+                        **losses,
+                        **metrics,
+                        "epoch": epoch,
+                        "step": i + epoch * len(data_loader),
+                    }
+                )
 
             # Add values to epoch log
             for k, v in losses.items():
@@ -200,17 +228,25 @@ class CentralizedTrainer():
             for k, v in metrics.items():
                 scalars[k] = scalars.get(k, 0) + v
 
-        if self.logging == 'epoch':
+        if self.logging == "epoch":
             # Average epoch logs
             scalars = {k: v / (i + 1) for k, v in scalars.items()}
 
             # Write epoch logs
-            self.log_scalars(writer, scalars, epoch, 'val')
+            self.log_scalars(writer, scalars, epoch, "val")
+            wandb.log({**scalars, "epoch": epoch})
 
-        return {'loss': scalars['loss']}
+        return {"loss": scalars["loss"]}
 
-    def train(self, model: torch.nn.Module, data_loader: Iterable, val_loader: Iterable = None,
-              start_epoch: int = 0, timestamp: str = None, dst: str = None) -> None:
+    def train(
+        self,
+        model: torch.nn.Module,
+        data_loader: Iterable,
+        val_loader: Iterable = None,
+        start_epoch: int = 0,
+        timestamp: str = None,
+        dst: str = None,
+    ) -> None:
         # Load model (to device)
         model.to(self.device)
 
@@ -219,7 +255,7 @@ class CentralizedTrainer():
             timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
 
         # Create checkpoint directory
-        os.makedirs(osp.join(dst, timestamp, 'checkpoints'), exist_ok=True)
+        os.makedirs(osp.join(dst, timestamp, "checkpoints"), exist_ok=True)
 
         # Check if destination is provided
         if self.logging is not None:
@@ -253,9 +289,13 @@ class CentralizedTrainer():
             tbar.set_postfix({k: float(v) for k, v in result.items()}, refresh=True)
 
             # Save checkpoint
-            path = osp.join(dst, timestamp, 'checkpoints',
-                            f"{timestamp}_checkpoint_{str(epoch).zfill(4)}.pt")
-            torch.save(model, path)
+            path = osp.join(
+                dst,
+                timestamp,
+                "checkpoints",
+                f"{timestamp}_checkpoint_{str(epoch).zfill(4)}.pt",
+            )
+            torch.save(model.state_dict(), path)
 
         # Flush and close writer
         if self.logging is not None:

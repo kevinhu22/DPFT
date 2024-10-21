@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Iterable, List
 import os.path as osp
 
 import torch
-
+import wandb
 from deepspeed.profiling.flops_profiler import get_model_profile
 from deepspeed.accelerator import get_accelerator
 from tqdm import tqdm
@@ -15,13 +15,17 @@ from dprt.models import load as load_model
 from dprt.evaluation.exporters import build as build_exporter
 from dprt.evaluation.metric import build_metric
 
+from dprt.utils import visu
 
-class CentralizedEvaluator():
-    def __init__(self,
-                 metric: torch.nn.modules.loss._Loss = None,
-                 exporter: Callable = None,
-                 device: str = None,
-                 logging: str = None,):
+
+class CentralizedEvaluator:
+    def __init__(
+        self,
+        metric: torch.nn.modules.loss._Loss = None,
+        exporter: Callable = None,
+        device: str = None,
+        logging: str = None,
+    ):
         """
         Arguments:
             logging: Logging frequency. One of either None,
@@ -34,23 +38,15 @@ class CentralizedEvaluator():
         self.logging = logging
 
     @classmethod
-    def from_config(cls,
-                    config: Dict[str, Any],
-                    *args,
-                    **kwargs) -> CentralizedEvaluator:  # noqa: F821
-        metric = build_metric(
-            config['evaluate']
-        )
-        exporter = build_exporter(config['evaluate']['exporter']['name'], config)
-        device = torch.device(config['computing']['device'])
-        logging = config['train'].get('logging')
+    def from_config(
+        cls, config: Dict[str, Any], *args, **kwargs
+    ) -> CentralizedEvaluator:  # noqa: F821
+        metric = build_metric(config["evaluate"])
+        exporter = build_exporter(config["evaluate"]["exporter"]["name"], config)
+        device = torch.device(config["computing"]["device"])
+        logging = config["train"].get("logging")
 
-        return cls(
-            metric=metric,
-            exporter=exporter,
-            device=device,
-            logging=logging
-        )
+        return cls(metric=metric, exporter=exporter, device=device, logging=logging)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.evaluate(*args, **kwargs)
@@ -60,7 +56,9 @@ class CentralizedEvaluator():
         return {k: v.to(device) for k, v in data.items()}
 
     @staticmethod
-    def log_scalars(writer, scalars: Dict[str, Any], epoch: int, prefix: str = None) -> None:
+    def log_scalars(
+        writer, scalars: Dict[str, Any], epoch: int, prefix: str = None
+    ) -> None:
         # Get prefix
         prefix = f"{prefix}/" if prefix is not None else ""
 
@@ -69,8 +67,9 @@ class CentralizedEvaluator():
             writer.add_scalar(prefix + name, scalar, epoch)
 
     @torch.no_grad()
-    def evaluate_complexity(self, epoch: int, model: torch.nn.Module,
-                            data_loader: Iterable, writer=None):
+    def evaluate_complexity(
+        self, epoch: int, model: torch.nn.Module, data_loader: Iterable, writer=None
+    ):
         # Set model to evaluation mode
         model.eval()
 
@@ -83,19 +82,22 @@ class CentralizedEvaluator():
         # Determine model complexity
         with get_accelerator().device(self.device):
             flops, macs, params = get_model_profile(
-                model=model, args=(data,),
-                print_profile=False, warm_up=10, as_string=False
+                model=model,
+                args=(data,),
+                print_profile=False,
+                warm_up=10,
+                as_string=False,
             )
 
         # Log model complexity
         self.log_scalars(
-            writer, {'FLOPS': flops, 'MACS': macs, 'Parameters': params},
-            epoch, 'test'
+            writer, {"FLOPS": flops, "MACS": macs, "Parameters": params}, epoch, "test"
         )
 
     @torch.no_grad()
-    def evaluate_inference_time(self, epoch: int, model: torch.nn.Module,
-                                data_loader: Iterable, writer=None):
+    def evaluate_inference_time(
+        self, epoch: int, model: torch.nn.Module, data_loader: Iterable, writer=None
+    ):
         # Set model to evaluation mode
         model.eval()
 
@@ -106,7 +108,9 @@ class CentralizedEvaluator():
         data: Dict[str, torch.Tensor] = self._dict_to(data, self.device)
 
         # Initialize loggers
-        starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(
+            enable_timing=True
+        )
         repetitions = 300
         timings = torch.zeros((repetitions, 1))
 
@@ -130,13 +134,21 @@ class CentralizedEvaluator():
 
         # Log inference time measures
         self.log_scalars(
-            writer, {'Inference_time_mean_ms': mean_syn, 'Inference_time_std_ms': std_syn},
-            epoch, 'test'
+            writer,
+            {"Inference_time_mean_ms": mean_syn, "Inference_time_std_ms": std_syn},
+            epoch,
+            "test",
         )
 
     @torch.no_grad()
-    def evaluate_one_epoch(self, epoch: int, model: torch.nn.Module,
-                           data_loader: Iterable, writer=None, dst: str = None):
+    def evaluate_one_epoch(
+        self,
+        epoch: int,
+        model: torch.nn.Module,
+        data_loader: Iterable,
+        writer=None,
+        dst: str = None,
+    ):
         # Set model to evaluation mode
         model.eval()
 
@@ -146,10 +158,10 @@ class CentralizedEvaluator():
         with tqdm(total=len(data_loader)) as pbar:
             for i, (data, labels) in enumerate(data_loader):
                 # Load data and labels (to device)
-                labels: List[Dict[str, torch.Tensor]] = \
-                    [self._dict_to(label, self.device) for label in labels]
-                data: Dict[str, torch.Tensor] = \
-                    self._dict_to(data, self.device)
+                labels: List[Dict[str, torch.Tensor]] = [
+                    self._dict_to(label, self.device) for label in labels
+                ]
+                data: Dict[str, torch.Tensor] = self._dict_to(data, self.device)
 
                 # Make prediction
                 output = model(data)
@@ -158,11 +170,13 @@ class CentralizedEvaluator():
                 metrics = self.eval_fn(output, labels)
 
                 # Log evaluation step
-                if self.logging == 'step':
-                    self.log_scalars(writer, metrics, i + epoch * len(data_loader), 'test')
+                if self.logging == "step":
+                    self.log_scalars(
+                        writer, metrics, i + epoch * len(data_loader), "test"
+                    )
 
                 # Add values to epoch log
-                if self.logging == 'epoch':
+                if self.logging == "epoch":
                     for k, v in metrics.items():
                         scalars[k] = scalars.get(k, 0) + v
 
@@ -170,23 +184,31 @@ class CentralizedEvaluator():
                 if self.export_fn is not None:
                     self.export_fn(output, labels, i * len(labels), dst)
 
+                # self.inference_plot(data, output, labels, i, dst)
+
                 # Report training progress
                 pbar.update()
 
-        if self.logging == 'epoch':
+        if self.logging == "epoch":
             # Average epoch logs
             scalars = {k: v / (i + 1) for k, v in scalars.items()}
 
             # Write epoch logs
-            self.log_scalars(writer, scalars, epoch, 'test')
+            self.log_scalars(writer, scalars, epoch, "test")
 
-    def evaluate(self, checkpoint: str, data_loader: Iterable, dst: str = None):
+    def inference_plot(self, data, output, labels, i, dst):
+        image = data["camera_mono"]
+        predicted_objects = self.export_fn._construct_kradar_objects(output, conf_thr=0)
+
+    def evaluate(self, checkpoint: str, data_loader: Iterable, dst: str = None, config: Dict[str, Any] = None):
         # Load model from checkpoint
-        model, epoch, timestamp = load_model(checkpoint)
+        model, epoch, timestamp = load_model(checkpoint, config)
 
         # Load model (to device)
         model.to(self.device)
+        wandb.init(project="DPFT_run2", config=config)
 
+        wandb.watch(model, log="all")
         # Check if destination is provided
         if self.logging is not None:
             dst = osp.join(dst, timestamp)
@@ -208,7 +230,7 @@ class CentralizedEvaluator():
         if self.logging is not None:
             writer.flush()
             writer.close()
-
+        wandb.finish()
 
 def build_evaluator(*args, **kwargs):
     return CentralizedEvaluator.from_config(*args, **kwargs)
