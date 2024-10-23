@@ -361,3 +361,5 @@ pyrightconfig.json
 log/
 outputs/
 # End of https://www.toptal.com/developers/gitignore/api/python,c++,cuda,jupyternotebooks,visualstudiocode,pycharm
+
+wandb/

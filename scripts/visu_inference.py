@@ -4,8 +4,9 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
-
+import open3d as o3d
 from dprt.utils.visu import get_box_corners, get_transformation
+from pathlib import Path
 
 
 class Object3D:
@@ -52,7 +53,7 @@ def visualize(image_path, preds, gts, intrinsic, extrinsic, output_path):
     alpha = 0.5
     lthick = 2
 
-    # cv_img = cv2.imread(image_path)  # Replace with the actual path
+    # cv_img = cv2.imread(image_path)
     cv_img = cv2.imread("data/Samsung 8TB 1/3/cam-front/cam-front_00464.png")
     cv_img = cv_img[:, 1280:, :]
     cv_img_ori = cv_img.copy()
@@ -194,11 +195,7 @@ def get_tuple_object(line, calib_info, is_heading_in_rad=True, path_label=None):
 
     offset = 0
     if (len(list_values)) == 11:
-        # print('* Exception error (Dataset): length of values is 11')
         offset = 1
-    else:
-        print("* Exception error (Dataset): length of values is 10")
-        print(path_label)
 
     cls_name = list_values[2 + offset][1:]
 
@@ -308,68 +305,91 @@ def get_pixel_from_point_cloud_in_camera_coordinate(point_cloud_xyz, intrinsic):
     return pixels
 
 
-# def vis_infer(self, sample_indices, conf_thr=0.7, is_nms=True, vis_mode=['lpc', 'spcube', 'cube'], is_train=False):
-#         '''
-#         * sample_indices: e.g. [0, 1, 2, 3, 4]
-#         * assume batch_size = 1 for convenience
-#         * vis_mode (TBD)
-#         '''
-#         self.network.eval()
+def vis_infer(labels, labels_dpft):
+    ### Labels ###
+    list_obj_label = []
+    for label_obj in labels:
+        cls_name, cls_id, (xc, yc, zc, theta, xl, yl, zl), obj_idx = label_obj
+        obj = Object3D(xc, yc, zc, xl, yl, zl, theta)
+        list_obj_label.append(obj)
 
-#             ### Labels ###
-#             labels = dict_out['label'][0]
-#             list_obj_label = []
-#             for label_obj in labels:
-#                 cls_name, cls_id, (xc, yc, zc, rot, xl, yl, zl), obj_idx = label_obj
-#                 obj = Object3D(xc, yc, zc, xl, yl, zl, rot)
-#                 list_obj_label.append(obj)
-#             ### Labels ###
+    ### Labels DPFT ###
+    list_obj_label_dpft = []
+    for label_obj in labels_dpft:
+        cls_name = label_obj["name"]
+        bbox = label_obj["bbox"]
+        obj = Object3D(
+            bbox["x"],
+            bbox["y"],
+            bbox["z"],
+            bbox["l"],  # Length
+            bbox["w"],  # Width
+            bbox["h"],  # Height
+            bbox["theta"],
+        )
+        list_obj_label_dpft.append(obj)
 
-#             ### Preds: post processing bbox ###
-#             list_obj_pred = []
-#             list_cls_pred = []
-#             if dict_datum['pp_num_bbox'] == 0:
-#                 pass
-#             else:
-#                 pp_cls = dict_datum['pp_cls']
-#                 for idx_pred, pred_obj in enumerate(dict_datum['pp_bbox']):
-#                     conf_score, xc, yc, zc, xl, yl, zl, rot = pred_obj
-#                     obj = Object3D(xc, yc, zc, xl, yl, zl, rot)
-#                     list_obj_pred.append(obj)
-#                     list_cls_pred.append('Sedan')
-#                     # list_cls_pred.append(self.dict_cls_id_to_name[pp_cls[idx_pred]])
-#             ### Preds: post processing bbox ###
+    ### Preds: post processing bbox ###
+    list_obj_pred = []
+    list_cls_pred = []
 
-#             ### Vis for open3d ###
-#             lines = [[0, 1], [1, 2], [2, 3], [0, 3],
-#                     [4, 5], [6, 7], #[5, 6],[4, 7],
-#                     [0, 4], [1, 5], [2, 6], [3, 7],
-#                     [0, 2], [1, 3], [4, 6], [5, 7]]
-#             colors_label = [[0, 0, 0] for _ in range(len(lines))]
-#             list_line_set_label = []
-#             list_line_set_pred = []
-#             for label_obj in list_obj_label:
-#                 line_set = o3d.geometry.LineSet()
-#                 line_set.points = o3d.utility.Vector3dVector(label_obj.corners)
-#                 line_set.lines = o3d.utility.Vector2iVector(lines)
-#                 line_set.colors = o3d.utility.Vector3dVector(colors_label)
-#                 list_line_set_label.append(line_set)
+    ### Vis for open3d ###
+    lines = [
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 3],
+        [4, 5],
+        [4, 6],
+        [5, 7],
+        [6, 7],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7],
+    ]
 
-#             for idx_pred, pred_obj in enumerate(list_obj_pred):
-#                 line_set = o3d.geometry.LineSet()
-#                 line_set.points = o3d.utility.Vector3dVector(pred_obj.corners)
-#                 line_set.lines = o3d.utility.Vector2iVector(lines)
-#                 # colors_pred = [self.dict_cls_name_to_rgb[list_cls_pred[idx_pred]] for _ in range(len(lines))]
-#                 colors_pred = [[1.,0.,0.] for _ in range(len(lines))]
-#                 line_set.colors = o3d.utility.Vector3dVector(colors_pred)
-#                 list_line_set_pred.append(line_set)
+    colors_label = [[0, 0, 0] for _ in range(len(lines))]
+    colors_pred = [[1.0, 0.0, 0.0] for _ in range(len(lines))]
+    list_line_set_label = []
+    list_line_set_pred = []
 
-#             pcd = o3d.geometry.PointCloud()
-#             pcd.points = o3d.utility.Vector3dVector(pc_lidar[:, :3])
-#             o3d.visualization.draw_geometries([pcd] + list_line_set_label + list_line_set_pred)
-#             ### Vis for open3d ###
+    for label_obj in list_obj_label:
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(label_obj.corners)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        line_set.colors = o3d.utility.Vector3dVector(colors_label)
+        list_line_set_label.append(line_set)
 
-#         return list_obj_label, list_obj_pred
+    for pred_obj in list_obj_label_dpft:
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(pred_obj.corners)
+        line_set.lines = o3d.utility.Vector2iVector(lines)
+        line_set.colors = o3d.utility.Vector3dVector(colors_pred)
+        list_line_set_pred.append(line_set)
+
+    # Create a coordinate frame for better orientation understanding
+    coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+        size=1.0, origin=[0, 0, 0]
+    )
+
+    # Combine all geometries
+    geometries = list_line_set_label + list_line_set_pred + [coordinate_frame]
+
+    # Visualize with Open3D
+    o3d.visualization.draw_geometries(
+        geometries,
+        window_name="3D Bounding Boxes",
+        width=800,
+        height=600,
+        left=50,
+        top=50,
+        point_show_normal=False,
+        mesh_show_wireframe=False,
+        mesh_show_back_face=False,
+    )
+
+    return list_obj_label, list_obj_pred
 
 
 def get_rotation_and_translation_from_extrinsic(extrinsic, is_deg=True):
@@ -408,7 +428,7 @@ def read_log_file(log_file):
             step = int(parts[0].split(": ")[1])
             image_path = parts[1].split(": ")[1]
             steps.append(step)
-            image_paths.append(image_path)
+            image_paths.append(Path(image_path))
     return steps, image_paths
 
 
@@ -481,9 +501,9 @@ def visualize_inference(log_file, base_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
     for step, image_path in zip(steps, image_paths):
-        # if step != 862:
-        #     continue
-        folder_number = image_path.split("/")[
+        if step != 862:
+            continue
+        folder_number = image_path.parts[
             6
         ]  # Extract the folder number from the image path
 
@@ -510,17 +530,23 @@ def visualize_inference(log_file, base_dir, output_dir):
         preds = read_txt_file(preds_file)
         gts_dpft = read_txt_file(gts_file_dpft)
         output_path = os.path.join(output_dir, f"{step_str}.png")
-        gts_file = "data/Samsung 8TB 1/7/info_label_v2/00182_00149.txt"
+        gts_file = Path("/data/Samsung 8TB 1/7/info_label_v2/00182_00149.txt")
         calib_info = np.array([33, -2.54, 0.3])
         gts = get_label_bboxes(gts_file, calib_info)
-
+        # vis_infer(gts, gts_dpft)
         visualize(
             image_path, preds, gts, intrinsic_params, extrinsic_params, output_path
         )
 
 
 if __name__ == "__main__":
-    log_file = "app/log/20241017-081549-441/exports/kradar/0.7/export_log.txt"  # Path to the log file
-    base_dir = "app/log/20241017-081549-441/exports/kradar/0.7/all"  # Base directory containing preds and gts folders
-    output_dir = "app/output/inference_images"  # Directory to save the output images
+    log_file = Path(
+        "/app/log/20241017-081549-441/exports/kradar/0.7/export_log.txt"
+    )  # Path to the log file
+    base_dir = Path(
+        "/app/log/20241017-081549-441/exports/kradar/0.7/all"
+    )  # Base directory containing preds and gts folders
+    output_dir = Path(
+        "/app/output/inference_images"
+    )  # Directory to save the output images
     visualize_inference(log_file, base_dir, output_dir)
