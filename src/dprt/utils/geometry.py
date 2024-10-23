@@ -3,11 +3,13 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-def get_transformation(translation: np.ndarray = None,
-                       rotation: np.ndarray = None,
-                       degrees: bool = False,
-                       inverse: bool = False,
-                       dtype: str = 'float32') -> np.ndarray:
+def get_transformation(
+    translation: np.ndarray = None,
+    rotation: np.ndarray = None,
+    degrees: bool = False,
+    inverse: bool = False,
+    dtype: str = "float32",
+) -> np.ndarray:
     """Returns a homogeneous transformation matrix given
     a translation and rotation.
 
@@ -35,7 +37,9 @@ def get_transformation(translation: np.ndarray = None,
     # Get rotation matrix
     if rotation.size == 3:
         # Convert euler angles to (3, 3) rotation matrix
-        rotation_matrix = Rotation.from_euler('xyz', rotation, degrees=degrees).as_matrix()
+        rotation_matrix = Rotation.from_euler(
+            "xyz", rotation, degrees=degrees
+        ).as_matrix()
 
     elif rotation.size == 4:
         # Convert quaternion to (3, 3) rotation matrix
@@ -61,10 +65,10 @@ def get_transformation(translation: np.ndarray = None,
     return transformation
 
 
-def get_box_corners(boxes: np.ndarray,
-                    wlh_factor: float = 1.0,
-                    wlh_offset: float = 0.0) -> np.ndarray:
-    """ Returns eight corners of the given M bounding boxes with
+def get_box_corners(
+    box: dict, wlh_factor: float = 1.0, wlh_offset: float = 0.0
+) -> np.ndarray:
+    """Returns eight corners of the given M bounding boxes with
     three coordinates per corner.
 
     Bounding boxes must be provided in the following fromat:
@@ -89,42 +93,45 @@ def get_box_corners(boxes: np.ndarray,
     Returns:
         corners: Bounding box corners (x, y, z) with dimensions (M, 8, 3).
     """
-    # Ensure boxes shape for single bounding boxes
-    boxes = np.atleast_2d(boxes)
 
-    # Get number of boxes
-    M = boxes.shape[0]
+    M = 1
 
     # Apply wlh factor and offset
-    boxes[:, 4:7] = boxes[:, 4:7] * wlh_factor
-    boxes[:, 4:7] = boxes[:, 4:7] + wlh_offset
+    # boxes[:, 4:7] = boxes[:, 4:7] * wlh_factor
+    # boxes[:, 4:7] = boxes[:, 4:7] + wlh_offset
 
     # Get 3D bounding box corners
-    x_corners = (boxes[:, 4] / 2)[:, None] * np.array([1, 1, -1, -1, 1, 1, -1, -1])
-    y_corners = (boxes[:, 5] / 2)[:, None] * np.array([1, -1, -1, 1, 1, -1, -1, 1])
-    z_corners = (boxes[:, 6] / 2)[:, None] * np.array([0, 0, 0, 0, 1, 1, 1, 1])
-    corners = np.swapaxes(np.dstack((x_corners, y_corners, z_corners)), 1, 2)
-
+    x_corners = (box["l"] / 2) * np.array([1, 1, -1, -1, 1, 1, -1, -1])
+    y_corners = (box["w"] / 2) * np.array([1, -1, -1, 1, 1, -1, -1, 1])
+    z_corners = (box["h"] / 2) * np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    # corners = np.swapaxes(np.dstack((x_corners, y_corners, z_corners)), 1, 2)
+    corners = np.vstack((x_corners, y_corners, z_corners)).T
     # Create rotation matrices from rotation angle
-    rotation_matrices = np.stack([np.eye(3, 3)] * M)
-    rotation_matrices[:, 0, 0] = np.cos(boxes[:, 3])
-    rotation_matrices[:, 0, 1] = -np.sin(boxes[:, 3])
-    rotation_matrices[:, 1, 0] = np.sin(boxes[:, 3])
-    rotation_matrices[:, 1, 1] = np.cos(boxes[:, 3])
-
+    # rotation_matrix = np.eye(3, 3)
+    # rotation_matrix[0, 0] = np.cos(box["theta"])
+    # rotation_matrix[0, 1] = -np.sin(box["theta"])
+    # rotation_matrix[1, 0] = np.sin(box["theta"])
+    # rotation_matrix[1, 1] = np.cos(box["theta"])
+    rotation_matrix = np.array(
+        [
+            [np.cos(box["theta"]), -np.sin(box["theta"]), 0],
+            [np.sin(box["theta"]), np.cos(box["theta"]), 0],
+            [0, 0, 1],
+        ]
+    )
     # Rotate 3D bounding box corners
-    corners = np.einsum('...jk, ...km', rotation_matrices, corners)
+    corners = np.dot(corners, rotation_matrix.T)
+    # corners = np.einsum("...jk, ...km", rotation_matrices, corners)
 
     # Translate 3D bounding box corners
-    corners[:, 0, :] = corners[:, 0, :] + boxes[:, 0, None]
-    corners[:, 1, :] = corners[:, 1, :] + boxes[:, 1, None]
-    corners[:, 2, :] = corners[:, 2, :] + boxes[:, 2, None]
+    corners[:, 0] += box["x"]
+    corners[:, 1] += box["y"]
+    corners[:, 2] += box["z"]
 
-    return np.swapaxes(corners, 1, 2)
+    return corners
 
 
-def transform_boxes(boxes: np.ndarray,
-                    transformation: np.ndarray) -> np.ndarray:
+def transform_boxes(boxes: np.ndarray, transformation: np.ndarray) -> np.ndarray:
     """Returns the transformed bounding boxes.
 
     Arguments:
@@ -148,13 +155,12 @@ def transform_boxes(boxes: np.ndarray,
     # TODO: Include rotation
 
     # Transform bounding box corners (cornerwise dot product)
-    boxes[:, :3] = np.einsum('ij,...j->...i', transformation, center)[:, :3]
+    boxes[:, :3] = np.einsum("ij,...j->...i", transformation, center)[:, :3]
 
     return boxes
 
 
-def transform_points(points: np.ndarray,
-                     transformation: np.ndarray) -> np.ndarray:
+def transform_points(points: np.ndarray, transformation: np.ndarray) -> np.ndarray:
     """Returns the transformed point cloud.
 
     Arguments:
@@ -176,6 +182,6 @@ def transform_points(points: np.ndarray,
     coord = np.column_stack((points[:, :3], np.ones(N)))
 
     # Transform point coordinates (pointwise dot product)
-    points[:, :3] = np.einsum('ij,...j->...i', transformation, coord)[:, :3]
+    points[:, :3] = np.einsum("ij,...j->...i", transformation, coord)[:, :3]
 
     return points

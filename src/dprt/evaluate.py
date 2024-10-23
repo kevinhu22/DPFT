@@ -9,7 +9,7 @@ from dprt.utils.misc import set_seed
 
 
 def main(src: str, cfg: str, checkpoint: str, dst: str):
-    """ Data preparation for subsequent model training or evaluation.
+    """Data preparation for subsequent model training or evaluation.
 
     Arguments:
         scr: Source directory path to the raw dataset folder.
@@ -18,31 +18,46 @@ def main(src: str, cfg: str, checkpoint: str, dst: str):
     """
     # Load dataset configuration
     config = load_config(cfg)
-    
+
     # Set global random seed
-    set_seed(config['computing']['seed'])
+    set_seed(config["computing"]["seed"])
 
     # Initialize test dataset
-    test_dataset = init(dataset=config['dataset'], src=src, split='test', config=config)
+    test_dataset = init(dataset=config["dataset"], src=src, split="test", config=config)
 
     # Load test dataset
     test_loader = load(test_dataset, config=config)
-
+    log_image = True
     # Evaluate model at checkpoint
-    evaluate(config)(checkpoint, test_loader, dst, config)
-    
+    evaluate(config)(checkpoint, test_loader, log_image, dst, config)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DPRT data preprocessing')
-    parser.add_argument('--src', type=str, default='/data/Samsung 8TB 2/kradar/processed',
-                        help="Path to the processed dataset folder.")
-    parser.add_argument('--cfg', type=str, default='/app/config/kradar.json',
-                        help="Path to the configuration file.")
-    parser.add_argument('--checkpoint', type=str, default='/app/log/20241017-081549-441/checkpoints/20241017-081549-441_checkpoint_0199.pt',
-                        help="Path to save the evaluation log.")
-    parser.add_argument('--dst', type=str, default='/app/log',
-                        help="Path to save the processed dataset.")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser("DPRT data preprocessing")
+    parser.add_argument(
+        "--src",
+        type=str,
+        default="/data/Samsung 8TB 2/kradar/processed",
+        help="Path to the processed dataset folder.",
+    )
+    parser.add_argument(
+        "--cfg",
+        type=str,
+        default="/app/config/kradar.json",
+        help="Path to the configuration file.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default="/app/log/20241017-081549-441/checkpoints/20241017-081549-441_checkpoint_0199.pt",
+        help="Path to save the evaluation log.",
+    )
+    parser.add_argument(
+        "--dst",
+        type=str,
+        default="/app/log",
+        help="Path to save the processed dataset.",
+    )
     args = parser.parse_args()
 
     main(src=args.src, cfg=args.cfg, checkpoint=args.checkpoint, dst=args.dst)

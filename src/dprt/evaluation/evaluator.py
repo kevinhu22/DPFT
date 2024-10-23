@@ -93,6 +93,7 @@ class CentralizedEvaluator:
         self.log_scalars(
             writer, {"FLOPS": flops, "MACS": macs, "Parameters": params}, epoch, "test"
         )
+        wandb.log({"FLOPS": flops, "MACS": macs, "Parameters": params})
 
     @torch.no_grad()
     def evaluate_inference_time(
@@ -139,6 +140,9 @@ class CentralizedEvaluator:
             epoch,
             "test",
         )
+        wandb.log(
+            {"Inference_time_mean_ms": mean_syn, "Inference_time_std_ms": std_syn}
+        )
 
     @torch.no_grad()
     def evaluate_one_epoch(
@@ -147,6 +151,7 @@ class CentralizedEvaluator:
         model: torch.nn.Module,
         data_loader: Iterable,
         writer=None,
+        log_image=False,
         dst: str = None,
     ):
         # Set model to evaluation mode
@@ -162,14 +167,26 @@ class CentralizedEvaluator:
                     self._dict_to(label, self.device) for label in labels
                 ]
                 data: Dict[str, torch.Tensor] = self._dict_to(data, self.device)
-
+                if log_image:
+                    batch_indices = (
+                        data_loader.batch_sampler.sampler.data_source.dataset_paths
+                    )
+                    image_paths = [
+                        batch_indices[idx]["camera_mono"]
+                        for idx in range(i * 4, (i + 1) * 4)
+                    ]
+                else:
+                    image_paths = [None] * len(data)
                 # Make prediction
                 output = model(data)
 
                 # Evaluate model output
                 metrics = self.eval_fn(output, labels)
 
-                # Log evaluation step
+                # Log evaluation step to wandb
+                # wandb.log(metrics)
+
+                # Log evaluation step to TensorBoard
                 if self.logging == "step":
                     self.log_scalars(
                         writer, metrics, i + epoch * len(data_loader), "test"
@@ -182,9 +199,7 @@ class CentralizedEvaluator:
 
                 # Export predictions
                 if self.export_fn is not None:
-                    self.export_fn(output, labels, i * len(labels), dst)
-
-                # self.inference_plot(data, output, labels, i, dst)
+                    self.export_fn(output, labels, i * len(labels), image_paths, dst)
 
                 # Report training progress
                 pbar.update()
@@ -195,20 +210,29 @@ class CentralizedEvaluator:
 
             # Write epoch logs
             self.log_scalars(writer, scalars, epoch, "test")
+            # Log epoch metrics to wandb
+            # wandb.log(scalars)
 
     def inference_plot(self, data, output, labels, i, dst):
         image = data["camera_mono"]
         predicted_objects = self.export_fn._construct_kradar_objects(output, conf_thr=0)
 
-    def evaluate(self, checkpoint: str, data_loader: Iterable, dst: str = None, config: Dict[str, Any] = None):
+    def evaluate(
+        self,
+        checkpoint: str,
+        data_loader: Iterable,
+        log_image: bool = False,
+        dst: str = None,
+        config: Dict[str, Any] = None,
+    ):
         # Load model from checkpoint
         model, epoch, timestamp = load_model(checkpoint, config)
 
         # Load model (to device)
         model.to(self.device)
-        wandb.init(project="DPFT_run2", config=config)
+        # wandb.init(project="DPFT_run2", config=config)
 
-        wandb.watch(model, log="all")
+        # wandb.watch(model, log="all")
         # Check if destination is provided
         if self.logging is not None:
             dst = osp.join(dst, timestamp)
@@ -218,7 +242,7 @@ class CentralizedEvaluator:
             writer = SummaryWriter(log_dir=dst)
 
         # Evaluate model performance
-        self.evaluate_one_epoch(epoch, model, data_loader, writer, dst)
+        self.evaluate_one_epoch(epoch, model, data_loader, writer, log_image, dst)
 
         # Evaluate model inference time
         self.evaluate_inference_time(epoch, model, data_loader, writer)
@@ -231,6 +255,7 @@ class CentralizedEvaluator:
             writer.flush()
             writer.close()
         wandb.finish()
+
 
 def build_evaluator(*args, **kwargs):
     return CentralizedEvaluator.from_config(*args, **kwargs)

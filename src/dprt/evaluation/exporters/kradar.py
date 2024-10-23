@@ -461,7 +461,8 @@ class KRadarExporter:
         conf_thr: float,
         step: int,
         description: torch.Tensor,
-        dst: str,
+        image_path: str = None,
+        dst: str = None,
     ) -> None:
         """Exports the model prediction objects.
 
@@ -486,13 +487,21 @@ class KRadarExporter:
         # Serialize description
         description = self._serialize_description(description)
 
+        if image_path is not None:
+            # Write objects to file
+            image_name = image_path.split("/mono.jpg")[0].split("/")[-1]
+            with open(os.path.join(dst, "export_log.txt"), "a") as log:
+                log.write(f"Step: {step}, Image Path: {image_path}\n")
+
         # Add objects to all subsets in the description
         for desc in itertools.chain(["all"], description):
             # Define folder path
             folder = osp.join(dst, desc, "preds")
 
-            # Write objects to file
-            self.write(objects, osp.join(folder, f"{str(step).zfill(6)}.txt"))
+            self.write(
+                objects,
+                osp.join(folder, f"{str(step).zfill(6)}.txt"),
+            )
 
     def _export_target_objects(
         self,
@@ -541,13 +550,16 @@ class KRadarExporter:
             # Add step to value file
             self.write([str(step).zfill(6)], osp.join(folder, "val.txt"))
 
+        return objects
+
     def _export_output_batch(
         self,
         batch: Dict[str, torch.Tensor],
         conf_thr: float,
         step: int,
         description: List[str],
-        dst: str,
+        image_paths: List[str] = None,
+        dst: str = None,
     ) -> None:
         """Exports the batched model prediction objects.
 
@@ -568,7 +580,9 @@ class KRadarExporter:
         )
 
         for i, (data, desc) in enumerate(zip(batch, description)):
-            self._export_output_objects(data, conf_thr, step + i, desc, dst)
+            self._export_output_objects(
+                data, conf_thr, step + i, desc, image_paths[i], dst
+            )
 
     def _export_target_batch(
         self, batch: List[Dict[str, torch.Tensor]], conf_thr: float, step: int, dst: str
@@ -604,7 +618,8 @@ class KRadarExporter:
         outputs: Dict[str, torch.Tensor],
         targets: List[Dict[str, torch.Tensor]],
         step: int,
-        dst: str,
+        image_paths: List[str] = None,
+        dst: str = None,
     ) -> None:
         """Exports predictions and lables in the K-Radar evaluation format.
 
@@ -630,7 +645,9 @@ class KRadarExporter:
             description = self._export_target_batch(targets, conf_thr, step, folder)
 
             # Export predictions
-            self._export_output_batch(outputs, conf_thr, step, description, folder)
+            self._export_output_batch(
+                outputs, conf_thr, step, description, image_paths, folder
+            )
 
 
 def build_kradar(*args, **kwargs):
